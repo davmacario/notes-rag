@@ -1,0 +1,29 @@
+[project]
+name = "notes-rag"
+version = "0.1.0"
+description = "RAG for Markdown notes"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "click>=8.3.2",
+    "gitpython>=3.1.46",
+    "llama-index-core>=0.14.20",
+    "llama-index-embeddings-huggingface>=0.7.0",
+    "llama-index-readers-file>=0.6.0",
+    "llama-index-vector-stores-chroma>=0.5.5",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+    "pytest>=9.0.3",
+    "ruff>=0.15.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120

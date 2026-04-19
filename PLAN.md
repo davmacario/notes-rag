@@ -10,6 +10,7 @@ This document outlines the plan for building a local RAG (Retrieval Augmented Ge
 - **No external providers**: Avoid cloud APIs; use open-source libraries and local models
 - **Efficient retrieval**: Chunk-based indexing with semantic search for fast information access
 - **Simple re-indexing**: CLI command to trigger daily re-indexing process
+- **HTTP API**: Expose `/query` endpoint for easy integrations (e.g., MCP, web apps)
 
 ## Architecture
 
@@ -21,21 +22,21 @@ This document outlines the plan for building a local RAG (Retrieval Augmented Ge
 │   ./rag index         → rebuild embeddings from notes repo          │
 │   ./rag query "question"  → search & generate answer                │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-  ┌──────▼──────┐          ┌────▼─────┐
-  │ Indexer     │          │ Query    │
-  │ - Clone/pull│          │ - Embed  │
-  │ - Parse.md  │          │ - Search │
-  │ - Chunk     │          │ - Generate│
-  │ - Embed     │          │ - Cite   │
-  └──────┬──────┘          └─────┬────┘
-         │                       │
-    ┌────▼────┐           ┌──────▼──────┐
-    │ Chroma  │           │  Ollama API │
-    │  DB     │           │ (local LLM) │
-    └─────────┘           └─────────────┘
+                      │
+          ┌───────────┴───────────┐
+          │                       │
+   ┌──────▼──────┐          ┌────▼─────┐
+   │ Indexer     │          │ Query    │
+   │ - GitMgr    │          │ - Embed  │
+   │ - Parse.md  │          │ - Search │
+   │ - Chunk     │          │ - Generate│
+   │ - Embed     │          │ - Cite   │
+   └──────┬──────┘          └─────┬────┘
+          │                       │
+     ┌────▼────┐           ┌──────▼──────┐
+     │ Chroma  │           │  Ollama API │
+     │  DB     │           │ (local LLM) │
+     └─────────┘           └─────────────┘
 ```
 
 ### Component Descriptions
@@ -43,7 +44,8 @@ This document outlines the plan for building a local RAG (Retrieval Augmented Ge
 | Component | Description |
 |-----------|-------------|
 | **CLI** | Entry point using Click for `index` and `query` commands |
-| **Indexer** | Handles Git operations, markdown parsing, chunking, and embedding |
+| **Indexer** | Main orchestration for document ingestion |
+| **GitManager** | Git operations sub-component (clone/pull, token auth) |
 | **Query** | Searches vector DB, assembles context, generates responses via Ollama |
 | **ChromaDB** | Local vector database for storing embeddings and metadata |
 | **Ollama** | Self-hosted LLM API for response generation |

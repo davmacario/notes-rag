@@ -1,23 +1,25 @@
 import logging
+import threading
+from pathlib import Path
 from typing import List
-from uuid import uuid4
 
+import chromadb.config
 from chromadb import Collection, PersistentClient
 from chromadb.api import ClientAPI
-from chromadb.config import Settings
-from llama_index.core import Document, get_response_synthesizer
-from llama_index.core.indices.vector_store import VectorIndexRetriever
+from llama_index.core import Document, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import MarkdownNodeParser
-from llama_index.core.schema import BaseNode, TextNode
+from llama_index.core.schema import BaseNode, NodeWithScore, TextNode
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from notes_rag.config import Config
+from notes_rag.extractor.abstract import BaseExtractor
 
 logger = logging.getLogger(__name__)
 
 
-def create_chroma_client(path: str) -> ClientAPI:
-    """Create a ChromaDB persistent client.
+def create_chroma_client(path: Path) -> ClientAPI:
+    """Create a ChromaDB persistent client (i.e., on local disk).
 
     Args:
         path: Path to the ChromaDB storage directory.
@@ -25,10 +27,9 @@ def create_chroma_client(path: str) -> ClientAPI:
     Returns:
         ChromaDB PersistentClient instance.
     """
-    # Use anonymous mode to avoid metadata conflicts
     client = PersistentClient(
         path=path,
-        settings=Settings(
+        settings=chromadb.config.Settings(
             anonymized_telemetry=False,
         ),
     )
@@ -46,19 +47,30 @@ class Storage:
 
     COLLECTION_NAME = "notes"
 
-    def __init__(self, chroma_path: str | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        extractors: List[BaseExtractor] = [],
+        chroma_path: str | Path | None = None,
+    ) -> None:
         """Initialize the ChromaDB storage.
 
         Args:
+            extractors: List of Extractor objects for document ingestion.
             chroma_path: Path to ChromaDB storage directory
         """
-        if chroma_path:
-            self.chroma_path = chroma_path
-        else:
-            config = Config()
-            self.chroma_path = str(config.notes_cache_dir / ".chromadb")
+        self.config = config
 
-        # Create ChromaDB client (possibly from existing path)
+        self._extractors = extractors
+
+        # TODO: actually use lock
+        self._lock = threading.Lock()
+
+        if chroma_path:
+            self.chroma_path = Path(chroma_path)
+        else:
+            self.chroma_path = Path("./.chromadb")
+
         self._client = create_chroma_client(self.chroma_path)
 
         # Create (or get existing) ChromaDB collection
@@ -66,32 +78,45 @@ class Storage:
             name=self.COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
         )
 
-        # Create vector store wrapper
-        self._vector_store = ChromaVectorStore(chroma_collection=self._chroma_collection)
-        logger.info(f"Initialized ChromaDB at {self.chroma_path}")
+        # Create vector store wrapper and storage context
+        self._vector_store = ChromaVectorStore(
+            chroma_collection=self._chroma_collection, collection_name=self.COLLECTION_NAME
+        )
+        self._storage_context = StorageContext.from_defaults(vector_store=self._vector_store)
+
+        # Create an empty VectorStoreIndex that will be populated via insert()
+        self._index = VectorStoreIndex(
+            nodes=[],
+            storage_context=self._storage_context,
+            embed_model=HuggingFaceEmbedding(model_name=self.embed_model),
+        )
+        logger.info(f"Initialized ChromaDB at {str(self.chroma_path)!r}")
+
+    @property
+    def embed_model(self) -> str:
+        """Get the embedding model name from configuration."""
+        return self.config.embedding_model
 
     @property
     def _collection(self):
         """Get the ChromaDB collection instance."""
         return self._client.get_collection(name=self.COLLECTION_NAME)
 
-    def add_documents(self, documents: List[Document]) -> None:
-        """Add documents to the ChromaDB collection.
+    def add_nodes(self, nodes: List[TextNode]) -> None:
+        """Add TextNodes to the vector index.
+
+        Uses VectorStoreIndex.insert() to generate embeddings and store them
+        in ChromaDB.
 
         Args:
-            documents: List of LlamaIndex Document objects to embed and store. Each document should have metadata
-                containing source file information.
+            nodes: List of TextNode objects to embed and store.
         """
-        # Convert to TextNodes
-        nodes = [TextNode(text=doc.text, metadata=doc.metadata) for doc in documents]
+        if not nodes:
+            return
 
-        ids = [str(uuid4()) for _ in nodes]
-        texts = [node.text for node in nodes]
-        metadatas = [node.metadata for node in nodes]
-
-        self._chroma_collection.add(ids=ids, documents=texts, metadatas=metadatas)
-
-        logger.info(f"Added {len(documents)} documents to storage")
+        # Insert nodes into the index, which generates embeddings via the embed_model passed at construction time
+        self._index.insert_nodes(nodes)
+        logger.info(f"Inserted {len(nodes)} documents with embeddings")
 
     def search(self, query: str, top_k: int = 5) -> List[BaseNode]:
         """Search for similar documents.
@@ -103,27 +128,69 @@ class Storage:
         Returns:
             List of similar document nodes, sorted by similarity.
         """
-        if not query.strip():
+        stripped_query = query.strip()
+        if not stripped_query:
             return []
 
-        # Use the vector store's query engine for search
-        query_engine = self._vector_store.as_query_engine()
-        response = query_engine.query(query)
+        # Retrieve: get top_k similar docs
+        retriever = self._index.as_retriever(similarity_top_k=top_k)
+        nodes_with_score = retriever.retrieve(query)
 
-        # Convert response sources to BaseNode objects
-        nodes = []
-        for source in response.source_nodes:
-            nodes.append(BaseNode(node_id=source.node_id, text=source.text, metadata=source.metadata))
+        logger.debug(f"Queried {top_k} nodes for query: {stripped_query!r}")
+
+        # TODO: figure out how to inject into the context
+        nodes = [n.node for n in nodes_with_score]
 
         return nodes
+
+    # TODO: define logic to minimize downtime (rework `clear` and `rebuild`)
+    # Ideally, a tmp DB is created and then it is swapped to the actual one.
+    # This will require using a lock for DB-related operations.
 
     def clear(self) -> None:
         """Clear all documents from the collection.
 
-        This drops the collection and recreates it.
+        This drops the collection and recreates it, along with a fresh index.
         """
+        # TODO: unify logic with __init__
         self._client.delete_collection(self.COLLECTION_NAME)
         self._chroma_collection = self._client.create_collection(
             name=self.COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
         )
+
+        # Recreate vector store, storage context, and index
+        self._vector_store = ChromaVectorStore(chroma_collection=self._chroma_collection)
+        self._storage_context = StorageContext.from_defaults(vector_store=self._vector_store)
+        self._index = VectorStoreIndex(
+            nodes=[],
+            storage_context=self._storage_context,
+            embed_model=HuggingFaceEmbedding(model_name=self.embed_model),
+        )
         logger.info(f"Cleared collection {self.COLLECTION_NAME}")
+
+    def rebuild(self) -> int:
+        """Rebuild the vector index by iterating over all extractors.
+
+        Clears the collection, calls each extractor's rebuild() method,
+        and stores the returned nodes in ChromaDB with embeddings.
+
+        Returns:
+            number of files processed
+        """
+        self.clear()
+
+        files_processed = 0
+        all_nodes: List[TextNode] = []
+
+        for extractor in self._extractors:
+            extractor_result = extractor.get_nodes()
+            files_processed += extractor_result.files_processed
+            all_nodes.extend(extractor_result.nodes)
+
+        if all_nodes:
+            self.add_nodes(all_nodes)
+            logger.info(f"Rebuild complete: {files_processed} files, {len(all_nodes)} nodes indexed")
+        else:
+            logger.warning("No nodes to be indexed!")
+
+        return files_processed

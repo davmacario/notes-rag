@@ -59,13 +59,18 @@ export TOP_K=5                                 # Chunks retrieved per query
 - **GitHub auth**: Token embedded in URL as `https://ghp_xxxx@github.com/...`
 - **Local only**: All embedding generation and LLM inference happens locally
 - **ChromaDB persistence**: Stored in `.chromadb/` directory (gitignored)
-- **Coding conventions**:
-  - Avoid inline comments when the logic is self-explainatory
-  - Avoid docstrings at the top of python files. The only docstrings present should be the ones for functions, classes, methods, and dataclass attributes
-  - Docstrings should be concise
+- **Passive extractors**: `Extractor` classes do not run as threads; `Storage` orchestrates indexing on a schedule
+- **Storage receives list of `Extractor` objects at initialization** for document ingestion
+- **Extractors return `List[Node]` to Storage**: Each `Extractor` handles its own parsing and chunking, producing `TextNode` objects that `Storage` passes to `VectorStoreIndex` without re-parsing
 - **Testing conventions**:
   - Use `pytest` as much as possible, especially built-in fixtures (e.g., `monkeypatch`, `caplog`)
   - For mocking objects, use `unittest.mock.MagicMock`
+
+## Coding Conventions
+
+- Avoid inline comments when the logic is self-explainatory
+- Avoid docstrings at the top of python files. The only docstrings present should be the ones for functions, classes, methods, and dataclass attributes
+- Docstrings should be concise
 
 ## File Structure
 
@@ -73,9 +78,9 @@ export TOP_K=5                                 # Chunks retrieved per query
 ./src/notes_rag/     # Application source code
   cli.py             # CLI entry point with `index` and `query` commands
   config.py          # Environment loading and configuration
-  indexer.py         # Git clone/pull, markdown parsing, chunking, embedding
+  extractor.py       # Abstract `Extractor` base class + `MarkdownExtractor` implementation
   query.py           # Search ChromaDB, assemble prompt, call Ollama API
-  storage.py         # ChromaDB initialization and CRUD operations
+  storage.py         # ChromaDB initialization, CRUD, and schedule orchestration with list of Extractors
 ./tests/             # Unit tests (each source file has a test file)
   test_config.py
   test_storage.py
@@ -92,17 +97,17 @@ main.py              # Main entrypoint of the application
 - **Don't commit tokens**: `NOTES_TOKEN` never committed; use env vars
 - **Don't ignore notes-cache**: `.gitignore`d at `./notes-cache/`
 - **Match embedding models**: Embedding model must be identical between indexing and querying
-- **Clone first**: Indexer clones notes repo fresh each run (doesn't assume existing cache)
+- **Embedding**: `Storage` uses LlamaIndex `VectorStoreIndex.from_documents()` to generate embeddings — never manually
+- **Embedding model**: `sentence-transformers` with `all-MiniLM-L6-v2`, passed to `VectorStoreIndex` via `embed_model` parameter
 
 ## RAG Workflow
 
 **Indexing** (`./rag index`):
 
-1. Clone/pull GitHub repo to `./notes-cache/`
-2. Parse `.md` files with LlamaIndex MarkdownReader
-3. Chunk by 1000 chars (200 overlap)
-4. Generate embeddings via sentence-transformers
-5. Store in ChromaDB with source file metadata
+1. CLI calls `Storage.rebuild()` which iterates over list of `Extractor` objects
+2. Each `Extractor` (e.g., `MarkdownExtractor`) processes its document type (clone/pull, parse, chunk, embed)
+3. Each `Extractor` stores its chunks in ChromaDB with source file metadata
+4. Print summary: N files processed, M chunks indexed
 
 **Querying** (`./rag query "question"`):
 

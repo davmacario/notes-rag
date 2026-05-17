@@ -1,10 +1,20 @@
-import os
+import logging
 import shutil
-import sys
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from llama_index.core import Document
+from chromadb import Collection
+from chromadb.api import ClientAPI
+from llama_index.core import StorageContext, VectorStoreIndex
+from llama_index.core.base.base_retriever import BaseRetriever
+from llama_index.core.schema import NodeWithScore, TextNode
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.vector_stores.chroma import ChromaVectorStore
 
+from notes_rag.config import Config
+from notes_rag.extractor.abstract import ExtractorResult
+from notes_rag.extractor.markdown_extractor import MarkdownExtractor
 from notes_rag.storage import Storage, create_chroma_client
 
 
@@ -14,94 +24,264 @@ class TestCreateChromaClient:
     def test_creates_chroma_client(self, tmp_path):
         """Test that ChromaDB client is created with correct path."""
         chroma_path = tmp_path / "chroma_db"
-        client = create_chroma_client(str(chroma_path))
+        client = create_chroma_client(chroma_path)
 
         # Client should be created
         assert client is not None
-        # Collection doesn't exist yet, that's expected
-        # Just verify client was created successfully
+        assert isinstance(client, ClientAPI)
 
 
 class TestStorage:
     """Test Storage class."""
 
-    @pytest.fixture(autouse=True)
-    def setup_storage(self, tmp_path):
-        """Set up test fixtures using tmp_path."""
-        self.storage = Storage(chroma_path=str(tmp_path / "chroma"))
-        self.storage.clear()
-        yield
-        # Cleanup after test
-        test_path = tmp_path / "chroma"
-        if test_path.exists():
-            shutil.rmtree(test_path)
+    @pytest.fixture
+    def mocked_chroma_collection(self):
+        return MagicMock(spec=Collection)
 
-    def test_add_documents(self):
-        """Test adding documents to ChromaDB."""
-        docs = [
-            Document(text="This is test document 1", metadata={"source_file": "test1.md"}),
-            Document(text="This is test document 2", metadata={"source_file": "test2.md"}),
+    @pytest.fixture
+    def mocked_chroma_client(self, mocked_chroma_collection):
+        client = MagicMock(spec=ClientAPI)
+        client.get_or_create_collection.return_value = mocked_chroma_collection
+        client.create_collection.return_value = mocked_chroma_collection
+        return client
+
+    @pytest.fixture
+    def mocked_md_extractor(self):
+        extractor = MagicMock(spec=MarkdownExtractor)
+        # TODO
+        return extractor
+
+    @pytest.fixture
+    def tmp_chroma_path(self, tmp_path: Path):
+        return tmp_path / "chroma_test"
+
+    @pytest.fixture
+    def mocked_chroma_vector_store(self):
+        chroma_vector_store = MagicMock(spec=ChromaVectorStore)
+        return chroma_vector_store
+
+    @pytest.fixture
+    def mocked_storage_context(self):
+        storage_context = MagicMock(spec=StorageContext)
+
+        return storage_context
+
+    @pytest.fixture
+    def mocked_vector_store_index(self):
+        vector_store_index = MagicMock(spec=VectorStoreIndex)
+        vector_store_index.insert_nodes.return_value = None
+        return vector_store_index
+
+    @pytest.fixture
+    def mocked_huggingface_embedding(self):
+        return MagicMock(spec=HuggingFaceEmbedding)
+
+    @pytest.fixture
+    def storage(
+        self,
+        monkeypatch,
+        mock_config: Config,
+        mocked_chroma_client: ClientAPI,
+        mocked_md_extractor: MarkdownExtractor,
+        mocked_chroma_vector_store: ChromaVectorStore,
+        mocked_storage_context: StorageContext,
+        mocked_vector_store_index: VectorStoreIndex,
+        mocked_huggingface_embedding: HuggingFaceEmbedding,
+        tmp_chroma_path: Path,
+    ) -> Storage:
+        """Instance of Storage with mocked components"""
+        monkeypatch.setattr("notes_rag.storage.create_chroma_client", lambda *_: mocked_chroma_client)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", lambda **_: mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", lambda **_: mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", lambda **_: mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", lambda **_: mocked_huggingface_embedding)
+        return Storage(mock_config, [mocked_md_extractor], tmp_chroma_path)
+
+    # --- __init__ ---
+
+    def test_init(
+        self,
+        monkeypatch,
+        caplog,
+        mock_config: Config,
+        mocked_chroma_client: ClientAPI,
+        mocked_md_extractor: MarkdownExtractor,
+        mocked_chroma_vector_store: ChromaVectorStore,
+        mocked_storage_context: StorageContext,
+        mocked_vector_store_index: VectorStoreIndex,
+        mocked_huggingface_embedding: HuggingFaceEmbedding,
+        mocked_chroma_collection: Collection,
+        tmp_chroma_path: Path,
+    ):
+        mock_create_chroma_client = MagicMock(return_value=mocked_chroma_client)
+        monkeypatch.setattr("notes_rag.storage.create_chroma_client", mock_create_chroma_client)
+        mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
+        mock_storage_context_from_defaults = MagicMock(return_value=mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
+        mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
+        mock_huggingface_embedding_factory = MagicMock(return_value=mocked_huggingface_embedding)
+        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", mock_huggingface_embedding_factory)
+
+        with caplog.at_level(logging.INFO):
+            storage = Storage(mock_config, [mocked_md_extractor], tmp_chroma_path)
+
+        assert storage.config == mock_config
+        assert storage._extractors == [mocked_md_extractor]
+        assert storage.chroma_path == tmp_chroma_path
+        mock_create_chroma_client.assert_called_once_with(tmp_chroma_path)
+        assert storage._client == mocked_chroma_client
+        storage._client.get_or_create_collection.assert_called_once_with(
+            name=storage.COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+        )
+        assert storage._chroma_collection == mocked_chroma_collection
+        mock_chroma_vector_store_factory.assert_called_once_with(
+            chroma_collection=mocked_chroma_collection, collection_name=storage.COLLECTION_NAME
+        )
+        assert storage._vector_store == mocked_chroma_vector_store
+        mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
+        assert storage._storage_context == mocked_storage_context
+        mock_huggingface_embedding_factory.assert_called_once_with(model_name=mock_config.embedding_model)
+        mock_vector_store_index_factory.assert_called_once_with(
+            nodes=[], storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+        )
+        assert f"Initialized ChromaDB at {str(tmp_chroma_path)!r}" in caplog.text
+
+    # --- add_nodes ---
+
+    def test_add_nodes(self, caplog, storage):
+        """Test adding TextNodes to storage generates embeddings and stores in ChromaDB."""
+        nodes = [
+            TextNode(text="Node 1 content about machine learning", metadata={"source_file": "test1.md"}),
+            TextNode(text="Node 2 content about neural networks", metadata={"source_file": "test2.md"}),
         ]
 
-        self.storage.add_documents(docs)
-        collection = self.storage._collection
-        assert collection.count() == 2
+        with caplog.at_level(logging.INFO):
+            storage.add_nodes(nodes)
 
-    def test_add_documents_with_metadata(self):
-        """Test that metadata is preserved when adding documents."""
-        doc = Document(text="Test content", metadata={"source_file": "example.md", "chunk_index": 0})
+        storage._index.insert_nodes.assert_called_once_with(nodes)
 
-        self.storage.add_documents([doc])
+    # --- search ---
 
-        # Retrieve and verify metadata
-        collection = self.storage._collection
-        result = collection.get(include=["metadatas"])
-        assert result["metadatas"][0] == {"source_file": "example.md", "chunk_index": 0}
-
-    def test_search(self):
+    def test_search(self, caplog, storage):
         """Test searching for similar documents."""
-        docs = [
-            Document(text="Machine learning is a subset of AI", metadata={"source_file": "ai.md"}),
-            Document(text="Deep learning uses neural networks", metadata={"source_file": "dl.md"}),
-            Document(text="Python is a programming language", metadata={"source_file": "python.md"}),
+        mock_retriever = MagicMock(spec=BaseRetriever)
+        nodes = [
+            TextNode(text="Node 1 content about machine learning", metadata={"source_file": "test1.md"}),
+            TextNode(text="Node 2 content about neural networks", metadata={"source_file": "test2.md"}),
         ]
-
-        self.storage.add_documents(docs)
+        mock_retriever.retrieve.return_value = [
+            NodeWithScore(node=nodes[0], score=0.92),
+            NodeWithScore(node=nodes[1], score=0.85),
+        ]
+        storage._index.as_retriever.return_value = mock_retriever
 
         # Search for "machine learning" related content
-        results = self.storage.search("machine learning", top_k=2)
-        assert len(results) == 2
-        assert isinstance(results, list)
-        assert all(hasattr(r, "text") for r in results)
+        with caplog.at_level(logging.DEBUG):
+            results = storage.search("machine learning\n", top_k=2)
 
-    def test_search_empty_query(self):
+        assert results == nodes
+        assert "Queried 2 nodes for query: 'machine learning'" in caplog.text
+        storage._index.as_retriever.assert_called_once_with(similarity_top_k=2)
+        mock_retriever.retrieve.assert_called_once_with("machine learning\n")
+
+    def test_search_empty_query(self, storage):
         """Test that search handles empty queries gracefully."""
-        docs = [Document(text="Test content", metadata={"source_file": "test.md"})]
-        self.storage.add_documents(docs)
-
-        # Empty query should return empty results
-        results = self.storage.search("", top_k=5)
+        results = storage.search("\n\r", top_k=5)
         assert len(results) == 0
 
-    def test_clear(self):
-        """Test clearing all documents from the collection."""
-        docs = [
-            Document(text="Test 1", metadata={"source_file": "test1.md"}),
-            Document(text="Test 2", metadata={"source_file": "test2.md"}),
+    # --- clear ---
+
+    def test_clear(
+        self,
+        monkeypatch,
+        caplog,
+        storage,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+        mocked_chroma_vector_store,
+        mocked_storage_context,
+        mocked_vector_store_index,
+        mocked_huggingface_embedding,
+    ):
+        # mocked_chroma_client.delete_collection = MagicMock()
+
+        mocked_chroma_client.create_collection.return_value = mocked_chroma_collection
+        mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
+        mock_storage_context_from_defaults = MagicMock(return_value=mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
+        mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
+        mock_huggingface_embedding_factory = MagicMock(return_value=mocked_huggingface_embedding)
+        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", mock_huggingface_embedding_factory)
+
+        with caplog.at_level(logging.INFO):
+            storage.clear()
+
+        assert f"Cleared collection {storage.COLLECTION_NAME}" in caplog.text
+        mocked_chroma_client.delete_collection.assert_called_once_with(storage.COLLECTION_NAME)
+        mocked_chroma_client.create_collection.assert_called_once_with(
+            name=storage.COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+        )
+        mock_chroma_vector_store_factory.assert_called_once_with(chroma_collection=mocked_chroma_collection)
+        mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
+        mock_huggingface_embedding_factory.assert_called_once_with(model_name=storage.config.embedding_model)
+        mock_vector_store_index_factory.assert_called_once_with(
+            nodes=[], storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+        )
+
+    # --- rebuild ---
+
+    def test_rebuild(self, caplog, storage, mocked_md_extractor):
+        nodes = [
+            TextNode(text="Node 1 content about machine learning", metadata={"source_file": "test1.md"}),
+            TextNode(text="Node 2 content about neural networks", metadata={"source_file": "test2.md"}),
+            TextNode(text="Node 3 content about neural networks", metadata={"source_file": "test2.md"}),
         ]
+        mocked_md_extractor.get_nodes.return_value = ExtractorResult(
+            files_processed=2,
+            nodes=nodes,
+        )
+        storage.clear = MagicMock()
+        storage.add_nodes = MagicMock()
 
-        self.storage.add_documents(docs)
-        assert self.storage._collection.count() == 2
+        with caplog.at_level(logging.INFO):
+            out = storage.rebuild()
 
-        self.storage.clear()
-        assert self.storage._collection.count() == 0
+        assert out == 2
+        storage.clear.assert_called_once()
+        mocked_md_extractor.get_nodes.assert_called_once()
+        storage.add_nodes.assert_called_once_with(nodes)
+        assert "Rebuild complete: 2 files, 3 nodes indexed" in caplog.text
 
-    def test_search_limit(self):
-        """Test that search respects top_k parameter."""
-        docs = [Document(text=f"Test content {i}", metadata={"source_file": f"test{i}.md"}) for i in range(10)]
+    def test_rebuild_no_nodes(self, caplog, storage, mocked_md_extractor):
+        mocked_md_extractor.get_nodes.return_value = ExtractorResult(
+            files_processed=1,
+            nodes=[],
+        )
+        storage.clear = MagicMock()
+        storage.add_nodes = MagicMock()
 
-        self.storage.add_documents(docs)
+        with caplog.at_level(logging.WARNING):
+            out = storage.rebuild()
 
-        # Request only 3 results
-        results = self.storage.search("test", top_k=3)
-        assert len(results) <= 3
+        assert out == 1  # still, files_processed is 1
+        storage.clear.assert_called_once()
+        mocked_md_extractor.get_nodes.assert_called_once()
+        storage.add_nodes.assert_not_called()
+        assert "No nodes to be indexed!" in caplog.text
+
+    def test_rebuild_no_extractors(self, caplog, storage):
+        storage._extractors = []
+        storage.clear = MagicMock()
+        storage.add_nodes = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            out = storage.rebuild()
+
+        assert out == 0
+        storage.clear.assert_called_once()
+        storage.add_nodes.assert_not_called()
+        assert "No nodes to be indexed!" in caplog.text

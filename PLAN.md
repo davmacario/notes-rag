@@ -26,29 +26,56 @@ This document outlines the plan for building a local RAG (Retrieval Augmented Ge
           ┌───────────┴───────────┐
           │                       │
    ┌──────▼──────┐          ┌────▼─────┐
-   │ Indexer     │          │ Query    │
-   │ - GitMgr    │          │ - Embed  │
-   │ - Parse.md  │          │ - Search │
-   │ - Chunk     │          │ - Generate│
-   │ - Embed     │          │ - Cite   │
-   └──────┬──────┘          └─────┬────┘
-          │                       │
-     ┌────▼────┐           ┌──────▼──────┐
-     │ Chroma  │           │  Ollama API │
-     │  DB     │           │ (local LLM) │
-     └─────────┘           └─────────────┘
+   │ Storage     │          │ Query    │
+   │ - Schedule  │          │ - Embed  │
+   │ - Rebuild   │          │ - Search │
+   └──────┬──────┘          │ - Generate│
+           │                 │ - Cite   │
+    ┌──────▼────┐           └──────┬────┘
+    │ Chroma    │                  │
+    │  DB       │           ┌──────▼──────┐
+    └─────┬─────┘           │  Ollama API │
+          │           └──────▼──────┐
+     ┌────▼─────┐
+     │ Extractor │◄──────────────┘
+     │ (abstract)│
+     └──────────┘
 ```
 
 ### Component Descriptions
 
-| Component | Description |
-|-----------|-------------|
-| **CLI** | Entry point using Click for `index` and `query` commands |
-| **Indexer** | Main orchestration for document ingestion |
-| **GitManager** | Git operations sub-component (clone/pull, token auth) |
-| **Query** | Searches vector DB, assembles context, generates responses via Ollama |
-| **ChromaDB** | Local vector database for storing embeddings and metadata |
-| **Ollama** | Self-hosted LLM API for response generation |
+| Component      | Description                                                                     |
+| ---------- ---- | ------ -------- ------------------ ---------------------------- ------------- ------ |
+| **Storage**    | Orchestrates indexing schedule, receives list of `Extractor` objects            |
+| **Extractor**  | Abstract base class for document ingestion (passive, not thread-based)          |
+| **MarkdownExtractor** | Concrete `Extractor` subclass for `.md` files (clone, parse, chunk, embed) |
+| **Query**      | Searches vector DB, assembles context, generates responses via Ollama           |
+| **ChromaDB**   | Local vector database for storing embeddings and metadata                       |
+| **Ollama**     | Self-hosted LLM API for response generation                                     |
+
+### Abstract Extractor Class
+
+The `Extractor` base class (in `src/notes_rag/extractor.py`) defines the interface for document ingestion. It is **passive** — it does not run as a thread and must be called by `Storage`.
+
+#### Abstract Methods
+
+| Method          | Purpose                                                                 |
+| --------- ------ | ------ -------- ------------------------------------------------------- |
+| `rebuild(storage: Storage)` | Process documents and store chunks in ChromaDB (must be implemented by subclass) |
+
+#### Concrete Subclass: MarkdownExtractor
+
+| Method                                                                            | Purpose                                                                                                                                                                      |
+| ------ -------------------- --------------- ------ ---------- ----- | ------ -------------------------------------------- -------------------------- -------------------- --------------------------- -------- |
+| `__init__(extractors: list[Extractor])`                                         | Initialize MarkdownExtractor with the list of Extractor objects for shared storage access                                                                                  |
+| `rebuild(storage: Storage)`                                                     | **Core indexing logic**: Walk directory for `.md` files, parse with MarkdownReader, chunk using MarkdownNodeParser (1000 chars, 200 overlap), store embeddings in ChromaDB |
+
+#### Design Notes
+
+- Passive: does not run as Thread; `Storage` calls `rebuild()` on a schedule
+- Full rebuild on each cycle (not incremental) for consistency
+- Metadata stored: source_file path, chunk_index
+- Chunking follows PLAN.md strategy: 1000-char chunks, 200-char overlap
 
 ## Software Dependencies
 
@@ -70,25 +97,30 @@ GitPython>=3.1.0                # Git operations (clone/pull)
 ```
 1. CLI Trigger (click)
    ↓
-2. Clone/Pull Notes Repo (GitPython)
-   - Read NOTES_REPO_URL and NOTES_TOKEN from environment
-   - Clone/pull to NOTES_CACHE_DIR (./notes-cache/)
-   - Handle auth via token in URL: https://ghp_xx@github.com/user/repo.git
+2. Storage.rebuild() iterates over list of Extractor objects
    ↓
-3. Discover Markdown Files
+3. Each Extractor.rebuild(storage) executes:
+   ↓
+4. MarkdownExtractor.rebuild()
+   - Clone/Pull Notes Repo (GitPython)
+     - Read NOTES_REPO_URL and NOTES_TOKEN from environment
+     - Clone/pull to NOTES_CACHE_DIR (./notes-cache/)
+     - Handle auth via token in URL: https://ghp_xx@github.com/user/repo.git
+   ↓
+5. Discover Markdown Files
    - Recursively walk ./notes-cache/ for all .md files
    - Ignore hidden files/folders
    ↓
-4. Parse & Chunk
+6. Parse & Chunk
    - Use LlamaIndex MarkdownReader
    - Chunk by character size (1000 chars, 200 overlap)
    - Preserve markdown formatting
    ↓
-5. Generate Embeddings
+7. Generate Embeddings
    - Use sentence-transformers with all-MiniLM-L6-v2
    - Generate 768-dimensional vectors
    ↓
-6. Store in ChromaDB
+8. Store in ChromaDB
    - Store embeddings with metadata: source_file, chunk_index
    - Print summary: N files, M chunks
 ```
@@ -153,16 +185,16 @@ Answer:
 
 ## Environment Variables
 
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `OLLAMA_HOST` | Base URL of Ollama API (including port) | Yes | - |
-| `OLLAMA_MODEL` | Model name for generation (e.g., mistral, llama2) | Yes | - |
-| `NOTES_REPO_URL` | GitHub repo URL with token (https://ghp_xx@...) | Yes | - |
-| `NOTES_CACHE_DIR` | Local cache directory for cloned repo | No | `./notes-cache` |
-| `EMBEDDING_MODEL` | Sentence-transformers model name | No | `all-MiniLM-L6-v2` |
-| `TOP_K` | Number of chunks to retrieve per query | No | `5` |
-| `CHUNK_SIZE` | Maximum chunk size in characters | No | `1000` |
-| `CHUNK_OVERLAP` | Overlap between chunks in characters | No | `200` |
+| Variable          | Description                                       | Required | Default            |
+| ----------------- | ------------------------------------------------- | -------- | ------------------ |
+| `OLLAMA_HOST`     | Base URL of Ollama API (including port)           | Yes      | -                  |
+| `OLLAMA_MODEL`    | Model name for generation (e.g., mistral, llama2) | Yes      | -                  |
+| `NOTES_REPO_URL`  | GitHub repo URL with token (https://ghp_xx@...)   | Yes      | -                  |
+| `NOTES_CACHE_DIR` | Local cache directory for cloned repo             | No       | `./notes-cache`    |
+| `EMBEDDING_MODEL` | Sentence-transformers model name                  | No       | `all-MiniLM-L6-v2` |
+| `TOP_K`           | Number of chunks to retrieve per query            | No       | `5`                |
+| `CHUNK_SIZE`      | Maximum chunk size in characters                  | No       | `1000`             |
+| `CHUNK_OVERLAP`   | Overlap between chunks in characters              | No       | `200`              |
 
 ## File Structure
 
@@ -170,9 +202,9 @@ Answer:
 notes-rag/
 ├── main.py              # CLI entry point with click commands
 ├── config.py            # Configuration and environment variable loading
-├── indexer.py           # Document ingestion: Git, parsing, chunking, embeddings
+├── extractor.py         # Abstract Extractor base class + MarkdownExtractor implementation
 ├── query.py             # Query processing: search, prompt, Ollama generation
-├── storage.py           # ChromaDB wrapper: init, add, search, clear
+├── storage.py           # ChromaDB orchestration, scheduling, and Extractor management
 ├── requirements.txt     # Python dependencies
 ├── .env.example         # Environment variable template (do not commit secrets)
 ├── .gitignore           # Add ./notes-cache/ to ignore cached repo
@@ -182,8 +214,8 @@ notes-rag/
 ## Implementation Order
 
 1. **config.py** - Environment variable loading and defaults
-2. **storage.py** - ChromaDB initialization and basic operations
-3. **indexer.py** - Git operations, markdown parsing, chunking, embedding
+2. **storage.py** - ChromaDB orchestration, scheduling, and Extractor management
+3. **extractor.py** - Abstract Extractor base class + MarkdownExtractor implementation
 4. **query.py** - Search, prompt assembly, Ollama API integration
 5. **main.py** - CLI with click commands for index and query
 6. **requirements.txt** - Dependencies
@@ -193,15 +225,15 @@ notes-rag/
 
 ## Design Decisions
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| **Framework** | LlamaIndex | Better native support for file-based RAG, simpler API |
-| **Vector DB** | ChromaDB | Local-first, Python-native, minimal setup overhead |
-| **Embedding Model** | all-MiniLM-L6-v2 | Fast, lightweight (~90MB), good quality for retrieval |
-| **Chunking** | Simple character-based | Start simple, can improve with header-aware later |
-| **LLM** | Ollama (local) | Self-hosted, flexible, supports citation generation |
-| **Git Auth** | Token in URL | Simpler than credential helper setup, reliable |
-| **Citations** | Inline format [source: path] | Provides transparency, helps verify accuracy |
+| Decision            | Choice                       | Rationale                                             |
+| ------------------- | ---------------------------- | ----------------------------------------------------- |
+| **Framework**       | LlamaIndex                   | Better native support for file-based RAG, simpler API |
+| **Vector DB**       | ChromaDB                     | Local-first, Python-native, minimal setup overhead    |
+| **Embedding Model** | all-MiniLM-L6-v2             | Fast, lightweight (~90MB), good quality for retrieval |
+| **Chunking**        | Simple character-based       | Start simple, can improve with header-aware later     |
+| **LLM**             | Ollama (local)               | Self-hosted, flexible, supports citation generation   |
+| **Git Auth**        | Token in URL                 | Simpler than credential helper setup, reliable        |
+| **Citations**       | Inline format [source: path] | Provides transparency, helps verify accuracy          |
 
 ## Future Improvements
 

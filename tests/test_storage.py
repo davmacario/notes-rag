@@ -34,7 +34,6 @@ class TestStorage:
     @pytest.fixture
     def mocked_md_extractor(self):
         extractor = MagicMock(spec=MarkdownExtractor)
-        # TODO
         return extractor
 
     @pytest.fixture

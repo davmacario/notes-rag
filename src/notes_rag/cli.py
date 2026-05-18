@@ -1,19 +1,20 @@
 import argparse
-from datetime import datetime
-import logging
-import signal
 import asyncio
+import logging
 import os
-from pathlib import Path
+import signal
+from datetime import datetime
 
 from cron_converter import Cron
+
 from notes_rag.config import Config
 from notes_rag.extractor.markdown_extractor import MarkdownExtractor
 from notes_rag.logging_config import setup_logging
-from notes_rag.storage import Storage
 from notes_rag.mcp_server import MCPServer
+from notes_rag.storage import Storage
 
 logger = logging.getLogger(__name__)
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -53,9 +54,8 @@ async def main() -> None:
 
     config = Config.from_env()
 
-    # FIXME: avoid hardcoding
     md_extractor = MarkdownExtractor(
-        notes_directory=Path("/Users/dmacario/notes"),
+        notes_directory=config.notes_directory,
         notes_repo_url=config.notes_repo_url,
         notes_repo_branch=config.notes_branch,
     )
@@ -80,5 +80,4 @@ async def main() -> None:
     except asyncio.CancelledError:
         logger.info("Stopping application")
     finally:
-        # TODO: cleanup resources
         logger.info("Stopped application!")

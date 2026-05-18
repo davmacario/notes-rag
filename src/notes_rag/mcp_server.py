@@ -23,7 +23,11 @@ class MCPServer:
         @self.mcp.tool()
         async def query_notes(query_body: QueryBody):
             """
-            Query the user's notes knowledge base for additional context.
+            Query the user's personal notes for further context.
+
+            The query body consists of:
+            - query: string containing the summary of the information you are looking for, in less than 10 words.
+            - num_docs: number of documents you would like to retrieve.
             """
             nodes = await self._storage.search(query_body.query, query_body.num_docs)
             additional_context = self._build_llm_context(nodes)

@@ -20,6 +20,7 @@ def mock_config():
     return Config(
         notes_repo_url="https://github.com/example/notes.git",
         notes_directory=Path("/tmp/notes"),
+        notes_branch="main",
         chroma_path=Path("/tmp/chromadb"),
         embedding_model="BAAI/bge-small-en-v1.5",
         server_host="127.0.0.1",
@@ -27,4 +28,5 @@ def mock_config():
         server_workers=1,
         server_timeout=30,
         rebuild_cron="0 */6 * * *",
+        timezone="Europe/Amsterdam",
     )

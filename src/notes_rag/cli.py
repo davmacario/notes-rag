@@ -1,15 +1,19 @@
 import argparse
+from datetime import datetime
+import logging
 import signal
 import asyncio
 import os
 from pathlib import Path
 
+from cron_converter import Cron
 from notes_rag.config import Config
 from notes_rag.extractor.markdown_extractor import MarkdownExtractor
 from notes_rag.logging_config import setup_logging
 from notes_rag.storage import Storage
-from notes_rag.webserver import MCPServer
+from notes_rag.mcp_server import MCPServer
 
+logger = logging.getLogger(__name__)
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -24,12 +28,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def run_storage_loop(storage: Storage, cron: str):
+async def run_storage_loop(storage: Storage, cron: str, timezone: str):
+    schedule = Cron(cron).schedule(timezone_str=timezone)
     while True:
-        await asyncio.to_thread(storage.rebuild)
-        # TODO: evaluate cron string
-
-        await asyncio.sleep(3600)
+        await storage.rebuild()
+        next_run_datetime = schedule.next()
+        logger.info(f"Next run scheduled for {next_run_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+        sleep_duration = next_run_datetime.timestamp() - datetime.now().timestamp()
+        await asyncio.sleep(sleep_duration)
 
 
 async def main() -> None:
@@ -50,8 +56,8 @@ async def main() -> None:
     # FIXME: avoid hardcoding
     md_extractor = MarkdownExtractor(
         notes_directory=Path("/Users/dmacario/notes"),
-        notes_repo_url="https://github.com/davmacario/notes.git",
-        notes_repo_branch="personal",
+        notes_repo_url=config.notes_repo_url,
+        notes_repo_branch=config.notes_branch,
     )
 
     storage = Storage(config, [md_extractor])
@@ -70,7 +76,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, handle_signal)
 
     try:
-        await asyncio.gather(run_storage_loop(storage, config.rebuild_cron), webserver.run())
+        await asyncio.gather(run_storage_loop(storage, config.rebuild_cron, config.timezone), webserver.run())
     except asyncio.CancelledError:
         logger.info("Stopping application")
     finally:

@@ -64,6 +64,7 @@ class Storage:
         self._vector_store = ChromaVectorStore(chroma_collection=self._chroma_collection)
         self._storage_context = StorageContext.from_defaults(vector_store=self._vector_store)
         self._index = VectorStoreIndex(
+            nodes=[],
             use_async=True,
             storage_context=self._storage_context,
             embed_model=self._embed_model,
@@ -134,6 +135,7 @@ class Storage:
         tmp_vector_store = ChromaVectorStore(chroma_collection=tmp_collection)
         tmp_storage_context = StorageContext.from_defaults(vector_store=tmp_vector_store)
         tmp_index = VectorStoreIndex(
+            nodes=[],
             use_async=True,
             storage_context=tmp_storage_context,
             embed_model=self._embed_model,
@@ -163,7 +165,5 @@ class Storage:
             logger.debug(f"Copied {count} records to main collection")
 
             self._reset_llamaindex()
-
-        await self.clear()
 
         return files_processed

@@ -123,7 +123,7 @@ class TestStorage:
         mock_huggingface_embedding_factory.assert_called_once_with(model_name=mock_config.embedding_model)
         assert storage._embed_model == mocked_huggingface_embedding
         mock_vector_store_index_factory.assert_called_once_with(
-            use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
         )
         assert f"Initialized ChromaDB at {str(mock_config.chroma_path)!r}" in caplog.text
 
@@ -206,7 +206,7 @@ class TestStorage:
         mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
         mock_huggingface_embedding_factory.assert_not_called()  # Reusing existing one - class attribute
         mock_vector_store_index_factory.assert_called_once_with(
-            use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
         )
 
     # --- rebuild ---
@@ -265,7 +265,7 @@ class TestStorage:
         mock_chroma_vector_store_factory.assert_called_with(chroma_collection=mocked_chroma_collection)
         mock_storage_context_from_defaults.assert_called_with(vector_store=mocked_chroma_vector_store)
         mock_vector_store_index_factory.assert_called_with(
-            use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
         )
         assert "Rebuild complete: 1 files, 2 nodes indexed" in caplog.text
 

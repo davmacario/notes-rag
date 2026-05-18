@@ -21,8 +21,9 @@ def setup_logging(level: str) -> logging.Logger:
         raise ValueError(f"Invalid log level: {level!r}. Must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL.")
 
     logger = logging.getLogger(__package__)
+    logger.propagate = False
     logger.setLevel(log_level)
-    logger.handlers.clear()
+    logger.handlers = []
 
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
     handler = logging.StreamHandler()

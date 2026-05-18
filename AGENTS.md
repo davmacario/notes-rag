@@ -7,7 +7,7 @@ Python vector retrieval service for markdown notes, exposing a `/query_rag` HTTP
 ## Stack
 
 - **Runtime**: Python 3.14+
-- **Framework**: FastAPI (HTTP server), LlamaIndex (RAG orchestration)
+- **Framework**: FastMCP (MCP server), LlamaIndex (RAG orchestration)
 - **Vector DB**: ChromaDB (local, persisted in `./.chromadb/` by default)
 - **Embeddings**: `llama-index-embeddings-huggingface` with `all-MiniLM-L6-v2`
 - **CLI**: argparse (in `cli.py`)
@@ -19,9 +19,9 @@ Python vector retrieval service for markdown notes, exposing a `/query_rag` HTTP
 
 ```bash
 # Development
-uv run python -m notes_rag                     # Run daemon (rebuild loop + HTTP server)
+uv run python -m notes_rag                     # Run MCP server + rebuild loop
 uv run python -m notes_rag --verbose           # Enable DEBUG logging
-uv run python -m notes_rag --only-rebuild      # Rebuild loop only, no server
+uv run python -m notes_rag --only-rebuild      # Rebuild loop only, no MCP server
 uv run python -m notes_rag --only-rebuild-once # Single rebuild, then exit
 
 # Setup

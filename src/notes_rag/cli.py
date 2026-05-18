@@ -1,23 +1,22 @@
-import asyncio
-import logging
 import argparse
+import signal
+import asyncio
 import os
 from pathlib import Path
-import sys
 
 from notes_rag.config import Config
 from notes_rag.extractor.markdown_extractor import MarkdownExtractor
 from notes_rag.logging_config import setup_logging
 from notes_rag.storage import Storage
-
-logger = logging.getLogger(__name__)
+from notes_rag.webserver import MCPServer
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Notes RAG - local retrieval augmented generation for markdown notes")
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         default=False,
         help="Enable DEBUG logging level",
@@ -25,9 +24,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def main_loop(argv: list[str] | None = None) -> None:
+async def run_storage_loop(storage: Storage, cron: str):
+    while True:
+        await asyncio.to_thread(storage.rebuild)
+        # TODO: evaluate cron string
+        await asyncio.sleep(3600)
+
+
+async def main() -> None:
     """Main entry point."""
-    args = parse_args(argv)
+    args = parse_args()
 
     # Resolve logging level: --verbose > LOG_LEVEL env > INFO default
     if args.verbose:
@@ -40,6 +46,7 @@ async def main_loop(argv: list[str] | None = None) -> None:
 
     config = Config.from_env()
 
+    # FIXME: avoid hardcoding
     md_extractor = MarkdownExtractor(
         notes_directory=Path("/Users/dmacario/notes"),
         notes_repo_url="https://github.com/davmacario/notes.git",
@@ -47,15 +54,24 @@ async def main_loop(argv: list[str] | None = None) -> None:
     )
 
     storage = Storage(config, [md_extractor], "./.chroma")
+    webserver = MCPServer(storage)
+
+    loop = asyncio.get_running_loop()
+    main_task = asyncio.current_task()
+
+    if not main_task:
+        raise RuntimeError("Something went wrong!")
+
+    def handle_signal():
+        main_task.cancel()
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGABRT):
+        loop.add_signal_handler(sig, handle_signal)
 
     try:
-        while True:
-            storage.rebuild()
-            import time
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        logger.info("Shutting down")
-        sys.exit(0)
-
-def main():
-    asyncio.run(main_loop())
+        await asyncio.gather(run_storage_loop(storage, config.rebuild_cron), webserver.run())
+    except asyncio.CancelledError:
+        logger.info("Stopping application")
+    finally:
+        # TODO: cleanup resources (what?)
+        logger.info("Stopped application!")

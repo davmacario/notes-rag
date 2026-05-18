@@ -101,7 +101,7 @@ class Storage:
         """Get the ChromaDB collection instance."""
         return self._client.get_collection(name=self.COLLECTION_NAME)
 
-    async def search(self, query: str, top_k: int = 5) -> List[BaseNode]:
+    async def search(self, query: str, top_k: int = 5) -> List[TextNode]:
         """Search for similar documents.
 
         Args:
@@ -122,7 +122,6 @@ class Storage:
 
         logger.debug(f"Queried {top_k} nodes for query: {stripped_query!r}")
 
-        # TODO: figure out how to inject into the context
         nodes = [n.node for n in nodes_with_score]
 
         return nodes

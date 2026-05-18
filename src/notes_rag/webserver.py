@@ -1,8 +1,7 @@
 from typing import List
 
-import uvicorn
-from fastapi import FastAPI
 from llama_index.core.schema import TextNode
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
 from notes_rag.storage import Storage
@@ -13,20 +12,19 @@ class QueryBody(BaseModel):
     num_docs: int
 
 
-class HTTPServer:
+class MCPServer:
     def __init__(self, storage: Storage, host: str = "0.0.0.0", port: int = 9099):
-
         self._storage = storage
-        self.app = FastAPI()
-        self.host = host
-        self.port = port
+        self.mcp = FastMCP("NotesRAG", stateless_http=True, json_response=True, host=host, port=port)
 
-        self._register_routes()
+        self._register_tools()
 
-    def _register_routes(self):
-
-        @self.app.post("/query_rag")
-        async def query_rag(query_body: QueryBody):
+    def _register_tools(self):
+        @self.mcp.tool()
+        async def query_notes(query_body: QueryBody):
+            """
+            Query the user's notes knowledge base for additional context.
+            """
             nodes = await self._storage.search(query_body.query, query_body.num_docs)
             additional_context = self._build_llm_context(nodes)
             return {"additional_context": additional_context}
@@ -40,6 +38,4 @@ class HTTPServer:
         return out
 
     async def run(self):
-        config = uvicorn.Config(self.app, host=self.host, port=self.port)
-        server = uvicorn.Server(config)
-        await server.serve()
+        await self.mcp.run_streamable_http_async()

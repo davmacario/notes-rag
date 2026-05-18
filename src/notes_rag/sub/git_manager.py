@@ -4,6 +4,7 @@ from typing import Optional
 
 from git import GitCommandError, InvalidGitRepositoryError, Repo
 
+logger = logging.getLogger(__name__)
 
 class GitManager:
     """Manages Git repository operations for the RAG notes system."""
@@ -32,7 +33,6 @@ class GitManager:
             self.repo.git.checkout(branch)
             return True
         except GitCommandError as e:
-            logger = logging.getLogger(__name__)
             logger.error("Failed to checkout branch: %s", e)
             return False
 
@@ -52,7 +52,6 @@ class GitManager:
                 self.repo.git.pull("origin")
             return True
         except GitCommandError as e:
-            logger = logging.getLogger(__name__)
             logger.error("Pull failed: %s", e)
             return False
 

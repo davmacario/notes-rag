@@ -17,7 +17,7 @@ This document outlines the plan for building a local vector retrieval service fo
 
 ### Components
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                   CLI (argparse)                             │
 │   notes-rag → start daemon (rebuild + server)                │
@@ -95,7 +95,7 @@ class BaseExtractor(ABC):
 
 ### Rebuild Loop
 
-```
+```text
 1. Parse REBUILD_CRON env var (cron expression)
 2. Calculate next run time
 3. Wait until next run
@@ -114,7 +114,7 @@ class BaseExtractor(ABC):
 2. `Storage.search(query, top_k=num_docs)` retrieves top-k nodes
 3. Format as delimited text:
 
-   ```
+   ```text
    --- [source: file.md] ---
    chunk text here
    --- [source: file2.md] ---
@@ -186,7 +186,7 @@ Default: `"0 */6 * * *"` (every 6 hours)
 
 ## Indexing Workflow
 
-```
+```text
 1. CLI Trigger
    ↓
 2. Storage.rebuild() called via asyncio.to_thread()

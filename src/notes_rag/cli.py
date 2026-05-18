@@ -28,6 +28,7 @@ async def run_storage_loop(storage: Storage, cron: str):
     while True:
         await asyncio.to_thread(storage.rebuild)
         # TODO: evaluate cron string
+
         await asyncio.sleep(3600)
 
 
@@ -53,7 +54,7 @@ async def main() -> None:
         notes_repo_branch="personal",
     )
 
-    storage = Storage(config, [md_extractor], "./.chroma")
+    storage = Storage(config, [md_extractor])
     webserver = MCPServer(storage)
 
     loop = asyncio.get_running_loop()
@@ -73,5 +74,5 @@ async def main() -> None:
     except asyncio.CancelledError:
         logger.info("Stopping application")
     finally:
-        # TODO: cleanup resources (what?)
+        # TODO: cleanup resources
         logger.info("Stopped application!")

@@ -3,36 +3,17 @@ import logging
 from pathlib import Path
 from typing import List
 
-import chromadb.config
-from chromadb import Collection, PersistentClient
-from chromadb.api import ClientAPI
+from chromadb import Collection
 from llama_index.core import StorageContext, VectorStoreIndex
-from llama_index.core.schema import BaseNode, TextNode
+from llama_index.core.schema import TextNode
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from notes_rag.config import Config
 from notes_rag.extractor.abstract import BaseExtractor
+from notes_rag.sub.storage_utils import copy_chroma_collection, create_chroma_client
 
 logger = logging.getLogger(__name__)
-
-
-def create_chroma_client(path: Path) -> ClientAPI:
-    """Create a ChromaDB persistent client (i.e., on local disk).
-
-    Args:
-        path: Path to the ChromaDB storage directory.
-
-    Returns:
-        ChromaDB PersistentClient instance.
-    """
-    client = PersistentClient(
-        path=path,
-        settings=chromadb.config.Settings(
-            anonymized_telemetry=False,
-        ),
-    )
-    return client
 
 
 class Storage:
@@ -65,19 +46,9 @@ class Storage:
         self._client = create_chroma_client(self.chroma_path)
         # Create (or get existing) ChromaDB collection
         self._chroma_collection: Collection = self._client.get_or_create_collection(name=self.COLLECTION_NAME)
-        # Vector store wrapper and storage context
-        self._vector_store = ChromaVectorStore(
-            chroma_collection=self._chroma_collection, collection_name=self.COLLECTION_NAME
-        )
-        self._storage_context = StorageContext.from_defaults(vector_store=self._vector_store)
         # Embedding model
         self._embed_model = HuggingFaceEmbedding(model_name=self.embed_model)
-        # Empty VectorStoreIndex that will be populated via insert()
-        self._index = VectorStoreIndex(
-            use_async=True,
-            storage_context=self._storage_context,
-            embed_model=self._embed_model,
-        )
+        self._reset_llamaindex()
         logger.info(f"Initialized ChromaDB at {str(self.chroma_path)!r}")
 
     @property
@@ -87,6 +58,16 @@ class Storage:
     @property
     def chroma_path(self) -> Path:
         return self._config.chroma_path
+
+    def _reset_llamaindex(self):
+        """Recreate vector store, storage context, and index, all referencing the persistent Chroma collection"""
+        self._vector_store = ChromaVectorStore(chroma_collection=self._chroma_collection)
+        self._storage_context = StorageContext.from_defaults(vector_store=self._vector_store)
+        self._index = VectorStoreIndex(
+            use_async=True,
+            storage_context=self._storage_context,
+            embed_model=self._embed_model,
+        )
 
     async def search(self, query: str, top_k: int = 5) -> List[TextNode]:
         """Search for similar documents.
@@ -130,28 +111,12 @@ class Storage:
             await self._index.ainsert_nodes(nodes)
             logger.info(f"Inserted {len(nodes)} documents with embeddings")
 
-    # TODO: define logic to minimize downtime (rework `clear` and `rebuild`)
-    # Ideally, a tmp DB is created and then it is swapped to the actual one.
-    # This will require using a lock for DB-related operations.
-
     async def clear(self) -> None:
-        """Clear all documents from the collection.
-
-        This drops the collection and recreates it, along with a fresh index.
-        """
+        """Clear all documents from the collection."""
         async with self._lock:
-            # TODO: unify logic with __init__
             self._client.delete_collection(self.COLLECTION_NAME)
             self._chroma_collection = self._client.create_collection(name=self.COLLECTION_NAME)
-
-            # Recreate vector store, storage context, and index
-            self._vector_store = ChromaVectorStore(chroma_collection=self._chroma_collection)
-            self._storage_context = StorageContext.from_defaults(vector_store=self._vector_store)
-            self._index = VectorStoreIndex(
-                use_async=True,
-                storage_context=self._storage_context,
-                embed_model=HuggingFaceEmbedding(model_name=self.embed_model),
-            )
+            self._reset_llamaindex()
             logger.info(f"Cleared collection {self.COLLECTION_NAME}")
 
     async def rebuild(self) -> int:
@@ -163,20 +128,42 @@ class Storage:
         Returns:
             number of files processed
         """
-        await self.clear()
+
+        tmp_collection_name = f"tmp_{self.COLLECTION_NAME}"
+        tmp_collection = self._client.get_or_create_collection(tmp_collection_name)
+        tmp_vector_store = ChromaVectorStore(chroma_collection=tmp_collection)
+        tmp_storage_context = StorageContext.from_defaults(vector_store=tmp_vector_store)
+        tmp_index = VectorStoreIndex(
+            use_async=True,
+            storage_context=tmp_storage_context,
+            embed_model=self._embed_model,
+        )
 
         files_processed = 0
-        all_nodes: List[TextNode] = []
-
+        nodes_count = 0
         for extractor in self._extractors:
             extractor_result = extractor.get_nodes()
             files_processed += extractor_result.files_processed
-            all_nodes.extend(extractor_result.nodes)
+            if extractor_result.nodes:
+                await tmp_index.ainsert_nodes(extractor_result.nodes)
+                nodes_count += len(extractor_result.nodes)
 
-        if all_nodes:
-            await self.add_nodes(all_nodes)
-            logger.info(f"Rebuild complete: {files_processed} files, {len(all_nodes)} nodes indexed")
+        if nodes_count:
+            logger.info(f"Rebuild complete: {files_processed} files, {nodes_count} nodes indexed")
         else:
             logger.warning("No nodes to be indexed!")
+
+        async with self._lock:
+            # Delete old collection
+            self._client.delete_collection(self.COLLECTION_NAME)
+            self._chroma_collection = self._client.create_collection(self.COLLECTION_NAME)
+
+            count = await asyncio.to_thread(copy_chroma_collection, tmp_collection, self._chroma_collection)
+
+            logger.debug(f"Copied {count} records to main collection")
+
+            self._reset_llamaindex()
+
+        await self.clear()
 
         return files_processed

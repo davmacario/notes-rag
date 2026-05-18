@@ -21,7 +21,6 @@ def mock_config():
         notes_repo_url="https://github.com/example/notes.git",
         notes_directory=Path("/tmp/notes"),
         chroma_path=Path("/tmp/chromadb"),
-        top_k=5,
         embedding_model="BAAI/bge-small-en-v1.5",
         server_host="127.0.0.1",
         server_port=8000,

@@ -11,6 +11,8 @@ from notes_rag.sub.git_manager import GitManager
 logger = logging.getLogger(__name__)
 
 
+# TODO: figure out a way to remove YAML header from markdown files that have them
+
 class MarkdownExtractor(BaseExtractor):
     def __init__(
         self,

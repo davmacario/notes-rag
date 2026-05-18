@@ -1,7 +1,6 @@
 import logging
-import shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from chromadb import Collection
@@ -15,20 +14,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from notes_rag.config import Config
 from notes_rag.extractor.abstract import ExtractorResult
 from notes_rag.extractor.markdown_extractor import MarkdownExtractor
-from notes_rag.storage import Storage, create_chroma_client
-
-
-class TestCreateChromaClient:
-    """Test create_chroma_client function."""
-
-    def test_creates_chroma_client(self, tmp_path):
-        """Test that ChromaDB client is created with correct path."""
-        chroma_path = tmp_path / "chroma_db"
-        client = create_chroma_client(chroma_path)
-
-        # Client should be created
-        assert client is not None
-        assert isinstance(client, ClientAPI)
+from notes_rag.storage import Storage
 
 
 class TestStorage:
@@ -129,7 +115,7 @@ class TestStorage:
         storage._client.get_or_create_collection.assert_called_once_with(name=storage.COLLECTION_NAME)
         assert storage._chroma_collection == mocked_chroma_collection
         mock_chroma_vector_store_factory.assert_called_once_with(
-            chroma_collection=mocked_chroma_collection, collection_name=storage.COLLECTION_NAME
+            chroma_collection=mocked_chroma_collection,
         )
         assert storage._vector_store == mocked_chroma_vector_store
         mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
@@ -218,61 +204,205 @@ class TestStorage:
         mocked_chroma_client.create_collection.assert_called_once_with(name=storage.COLLECTION_NAME)
         mock_chroma_vector_store_factory.assert_called_once_with(chroma_collection=mocked_chroma_collection)
         mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
-        mock_huggingface_embedding_factory.assert_called_once_with(model_name=storage._config.embedding_model)
+        mock_huggingface_embedding_factory.assert_not_called()  # Reusing existing one - class attribute
         mock_vector_store_index_factory.assert_called_once_with(
             use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
         )
 
     # --- rebuild ---
 
-    async def test_rebuild(self, caplog, storage, mocked_md_extractor):
+    async def test_rebuild(
+        self,
+        monkeypatch,
+        caplog,
+        storage,
+        mocked_md_extractor,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+        mocked_chroma_vector_store,
+        mocked_storage_context,
+        mocked_vector_store_index,
+        mocked_huggingface_embedding,
+    ):
         nodes = [
-            TextNode(text="Node 1 content about machine learning", metadata={"source_file": "test1.md"}),
-            TextNode(text="Node 2 content about neural networks", metadata={"source_file": "test2.md"}),
-            TextNode(text="Node 3 content about neural networks", metadata={"source_file": "test2.md"}),
+            TextNode(text="Chunk 1", metadata={"source_file": "doc1.md"}),
+            TextNode(text="Chunk 2", metadata={"source_file": "doc1.md"}),
         ]
-        mocked_md_extractor.get_nodes.return_value = ExtractorResult(
-            files_processed=2,
-            nodes=nodes,
-        )
-        storage.clear = AsyncMock()
-        storage.add_nodes = AsyncMock()
+        extractor_result = ExtractorResult(nodes=nodes, files_processed=1)
+        mocked_md_extractor.get_nodes.return_value = extractor_result
+
+        tmp_collection = MagicMock(spec=Collection)
+        call_count = [0]
+
+        def get_or_create_side_effect(name):
+            call_count[0] += 1
+            if name == f"tmp_{storage.COLLECTION_NAME}":
+                return tmp_collection
+            return mocked_chroma_collection
+
+        mocked_chroma_client.get_or_create_collection.side_effect = get_or_create_side_effect
+
+        mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
+        mock_storage_context_from_defaults = MagicMock(return_value=mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
+        mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
+
+        mock_copy = MagicMock(return_value=2)
+        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.INFO):
-            out = await storage.rebuild()
+            result = await storage.rebuild()
 
-        assert out == 2
-        storage.clear.assert_called_once()
+        assert result == 1
         mocked_md_extractor.get_nodes.assert_called_once()
-        storage.add_nodes.assert_called_once_with(nodes)
-        assert "Rebuild complete: 2 files, 3 nodes indexed" in caplog.text
-
-    async def test_rebuild_no_nodes(self, caplog, storage, mocked_md_extractor):
-        mocked_md_extractor.get_nodes.return_value = ExtractorResult(
-            files_processed=1,
-            nodes=[],
+        mocked_vector_store_index.ainsert_nodes.assert_called_once_with(nodes)
+        mocked_chroma_client.delete_collection.assert_called_with(storage.COLLECTION_NAME)
+        mock_chroma_vector_store_factory.assert_has_calls(
+            [call(chroma_collection=tmp_collection), call(chroma_collection=mocked_chroma_collection)]
         )
-        storage.clear = AsyncMock()
-        storage.add_nodes = AsyncMock()
+        mock_chroma_vector_store_factory.assert_called_with(chroma_collection=mocked_chroma_collection)
+        mock_storage_context_from_defaults.assert_called_with(vector_store=mocked_chroma_vector_store)
+        mock_vector_store_index_factory.assert_called_with(
+            use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+        )
+        assert "Rebuild complete: 1 files, 2 nodes indexed" in caplog.text
+
+    async def test_rebuild_no_nodes(
+        self,
+        monkeypatch,
+        caplog,
+        storage,
+        mocked_md_extractor,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+        mocked_chroma_vector_store,
+        mocked_storage_context,
+        mocked_vector_store_index,
+    ):
+        extractor_result = ExtractorResult(nodes=[], files_processed=0)
+        mocked_md_extractor.get_nodes.return_value = extractor_result
+
+        tmp_collection = MagicMock(spec=Collection)
+        mocked_chroma_client.get_or_create_collection.side_effect = [
+            mocked_chroma_collection,
+            tmp_collection,
+            mocked_chroma_collection,
+        ]
+        mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
+        mock_storage_context_from_defaults = MagicMock(return_value=mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
+        mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
+
+        mock_copy = MagicMock(return_value=0)
+        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.WARNING):
-            out = await storage.rebuild()
+            result = await storage.rebuild()
 
-        assert out == 1  # still, files_processed is 1
-        storage.clear.assert_called_once()
+        assert result == 0
         mocked_md_extractor.get_nodes.assert_called_once()
-        storage.add_nodes.assert_not_called()
+        mocked_vector_store_index.ainsert_nodes.assert_not_called()
         assert "No nodes to be indexed!" in caplog.text
 
-    async def test_rebuild_no_extractors(self, caplog, storage):
-        storage._extractors = []
-        storage.clear = AsyncMock()
-        storage.add_nodes = AsyncMock()
+    async def test_rebuild_no_extractors(
+        self,
+        monkeypatch,
+        caplog,
+        mock_config,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+        mocked_chroma_vector_store,
+        mocked_storage_context,
+        mocked_vector_store_index,
+        mocked_huggingface_embedding,
+    ):
+        monkeypatch.setattr("notes_rag.storage.create_chroma_client", lambda *_: mocked_chroma_client)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", lambda **_: mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", lambda **_: mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", lambda **_: mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", lambda **_: mocked_huggingface_embedding)
+
+        storage_no_extractors = Storage(mock_config, [])
+
+        tmp_collection = MagicMock(spec=Collection)
+        call_count = [0]
+
+        def get_or_create_side_effect(name=None, **kwargs):
+            call_count[0] += 1
+            actual_name = name or (kwargs.get("name") if kwargs else None)
+            if actual_name == f"tmp_{storage_no_extractors.COLLECTION_NAME}":
+                return tmp_collection
+            return mocked_chroma_collection
+
+        mocked_chroma_client.get_or_create_collection.side_effect = get_or_create_side_effect
+
+        mock_copy = MagicMock(return_value=0)
+        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.WARNING):
-            out = await storage.rebuild()
+            result = await storage_no_extractors.rebuild()
 
-        assert out == 0
-        storage.clear.assert_called_once()
-        storage.add_nodes.assert_not_called()
+        assert result == 0
         assert "No nodes to be indexed!" in caplog.text
+
+    async def test_rebuild_multiple_extractors(
+        self,
+        monkeypatch,
+        caplog,
+        mock_config,
+        storage,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+        mocked_chroma_vector_store,
+        mocked_storage_context,
+        mocked_vector_store_index,
+        mocked_huggingface_embedding,
+    ):
+        nodes_a = [TextNode(text="A1", metadata={"source_file": "a.md"})]
+        nodes_b = [
+            TextNode(text="B1", metadata={"source_file": "b.md"}),
+            TextNode(text="B2", metadata={"source_file": "b.md"}),
+        ]
+        extractor_result_a = ExtractorResult(nodes=nodes_a, files_processed=1)
+        extractor_result_b = ExtractorResult(nodes=nodes_b, files_processed=2)
+        ext_a = MagicMock(spec=MarkdownExtractor)
+        ext_a.get_nodes.return_value = extractor_result_a
+        ext_b = MagicMock(spec=MarkdownExtractor)
+        ext_b.get_nodes.return_value = extractor_result_b
+
+        storage._extractors = [ext_a, ext_b]
+
+        tmp_collection = MagicMock(spec=Collection)
+        call_count = [0]
+
+        def get_or_create_side_effect(name=None, **kwargs):
+            call_count[0] += 1
+            actual_name = name or (kwargs.get("name") if kwargs else None)
+            if actual_name == f"tmp_{storage.COLLECTION_NAME}":
+                return tmp_collection
+            return mocked_chroma_collection
+
+        mocked_chroma_client.get_or_create_collection.side_effect = get_or_create_side_effect
+
+        mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
+        monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
+        mock_storage_context_from_defaults = MagicMock(return_value=mocked_storage_context)
+        monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
+        mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
+        monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
+
+        mock_copy = MagicMock(return_value=3)
+        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
+
+        with caplog.at_level(logging.INFO):
+            result = await storage.rebuild()
+
+        assert result == 3
+        assert ext_a.get_nodes.call_count == 1
+        assert ext_b.get_nodes.call_count == 1
+        assert mocked_vector_store_index.ainsert_nodes.call_count == 2
+        assert "Rebuild complete: 3 files, 3 nodes indexed" in caplog.text

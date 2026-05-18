@@ -12,19 +12,20 @@ def setup_env(monkeypatch):
     monkeypatch.setenv("NOTES_REPO_URL", "https://github.com/example/notes.git")
     monkeypatch.setenv("NOTES_REPO_BRANCH", "main")
     monkeypatch.setenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-    monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
-    monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
 
 
 @pytest.fixture
 def mock_config():
     return Config(
-        ollama_host="http://localhost:11434",
         notes_repo_url="https://github.com/example/notes.git",
-        notes_cache_dir=Path("/tmp/notes"),
-        chunk_size=1000,
+        notes_directory=Path("/tmp/notes"),
+        chroma_path=Path("/tmp/chromadb"),
         top_k=5,
         embedding_model="BAAI/bge-small-en-v1.5",
-        log_level="WARNING",
+        server_host="127.0.0.1",
+        server_port=8000,
+        server_workers=1,
+        server_timeout=30,
+        rebuild_cron="0 */6 * * *",
     )

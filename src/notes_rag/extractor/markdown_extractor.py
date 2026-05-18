@@ -1,5 +1,4 @@
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
@@ -12,47 +11,24 @@ from notes_rag.sub.git_manager import GitManager
 logger = logging.getLogger(__name__)
 
 
-# TODO: fix configurability - later
-@dataclass
-class MarkdownExtractorConfig:
-    """Configuration for the MarkdownExtractor."""
-
-    chunk_size: int = 1000
-    chunk_overlap: int = 200
-
-
 class MarkdownExtractor(BaseExtractor):
-    """
-    The MarkdownExtractor takes the raw notes (markdown), chunks them, and forwards them to the Storage so that they are tracked
-    in the DB and can be queried.
-    It forces rebuild of the Storage on a schedule and it works in parallel to the app.
-
-    The notes are found in a local directory
-    """
-
     def __init__(
         self,
         notes_directory: Path,
         notes_repo_url: str,
         notes_repo_branch: str | None = None,
-        config: MarkdownExtractorConfig | None = None,
     ):
         """
         Args:
             notes_directory: path to the local copy of the notes
             notes_repo_url: Git URL of the repo. If private, it should include an access token
             notes_repo_branch: branch of the Git repo
-            notes_cache_dir: path to the cache directory where notes are stored
-            config: optional MarkdownExtractorConfig for chunking parameters
         """
-        self._config = config or MarkdownExtractorConfig()
-
         self.notes_directory = notes_directory.resolve()
         self._git = GitManager(self.notes_directory)
         self._notes_repo_url = notes_repo_url
         self._notes_repo_branch = notes_repo_branch
 
-    # TODO: figure out better approach - git operations are blocking...
     def _init_or_restore_notes_repo(self):
         """Initialize or restore the repository containing the notes.
 
@@ -89,9 +65,6 @@ class MarkdownExtractor(BaseExtractor):
 
         Walks through the notes directory recursively, parses .md files, chunks them,
         and returns the TextNodes. Storage will handle embedding and storing.
-
-        Args:
-            storage: The Storage instance to use for getting the chroma_path.
 
         Returns:
             ExtractorResult object

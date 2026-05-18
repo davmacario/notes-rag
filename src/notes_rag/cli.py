@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import argparse
 import os
+from pathlib import Path
 import sys
 
 from notes_rag.config import Config
@@ -23,7 +25,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> None:
+async def main_loop(argv: list[str] | None = None) -> None:
     """Main entry point."""
     args = parse_args(argv)
 
@@ -39,7 +41,7 @@ def main(argv: list[str] | None = None) -> None:
     config = Config.from_env()
 
     md_extractor = MarkdownExtractor(
-        notes_directory="/Users/dmacario/notes",
+        notes_directory=Path("/Users/dmacario/notes"),
         notes_repo_url="https://github.com/davmacario/notes.git",
         notes_repo_branch="personal",
     )
@@ -55,6 +57,5 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("Shutting down")
         sys.exit(0)
 
-
-if __name__ == "__main__":
-    main()
+def main():
+    asyncio.run(main_loop())

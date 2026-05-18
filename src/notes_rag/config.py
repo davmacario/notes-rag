@@ -1,4 +1,3 @@
-import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,13 +13,15 @@ def get_required_env(variable_name: str) -> str:
 
 
 DEFAULT_CONFIG = {
-    "ollama_host": "http://localhost:11434",
-    "notes_repo_url": None,
-    "notes_cache_dir": "./notes-cache",
-    "chunk_size": 1000,
+    "notes_directory": "./notes-cache",
+    "chroma_path": "./.chromadb",
     "top_k": 5,
     "embedding_model": "all-MiniLM-L6-v2",
-    "log_level": "INFO",
+    "server_host": "127.0.0.1",
+    "server_port": 8000,
+    "server_workers": 1,
+    "server_timeout": 30,
+    "rebuild_cron": "0 */6 * * *",
 }
 
 
@@ -30,44 +31,55 @@ class Config:
 
     Reads configuration from environment variables with sensible defaults.
     Required environment variables:
-        - OLLAMA_HOST: Base URL for Ollama API
         - NOTES_REPO_URL: GitHub repository URL with embedded token
 
     Optional environment variables with defaults:
-        - NOTES_CACHE_DIR: Local cache directory (default: "./notes-cache")
-        - CHUNK_SIZE: Maximum chunk size in characters (default: 1000)
+        - NOTES_DIRECTORY: Local cache directory (default: "./notes-cache")
+        - CHROMA_PATH: Path to ChromaDB storage (default: "./.chromadb")
         - TOP_K: Number of chunks to retrieve per query (default: 5)
-        - EMBEDDING_MODEL: Sentence transformers model (default: "all-MiniLM-L6-v2")
-        - LOG_LEVEL: Logging level (default: "INFO")
+        - EMBEDDING_MODEL: Embedding model name (default: "all-MiniLM-L6-v2")
+        - SERVER_HOST: HTTP server host (default: "127.0.0.1")
+        - SERVER_PORT: HTTP server port (default: 8000)
+        - SERVER_WORKERS: HTTP server workers (default: 1)
+        - SERVER_TIMEOUT: HTTP server timeout (default: 30)
+        - REBUILD_CRON: Cron expression for rebuild schedule (default: "0 */6 * * *")
     """
 
-    ollama_host: str
     notes_repo_url: str
-    notes_cache_dir: Path
-    chunk_size: int
+    notes_directory: Path
+    chroma_path: Path
     top_k: int
     embedding_model: str
-    log_level: str
+    server_host: str
+    server_port: int
+    server_workers: int
+    server_timeout: int
+    rebuild_cron: str
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "Config":
         load_dotenv(env_file)
 
         notes_repo_url = get_required_env("NOTES_REPO_URL")
-
-        ollama_host = os.getenv("OLLAMA_HOST", "not set")
-        notes_cache_dir = Path(os.getenv("NOTES_CACHE_DIR", DEFAULT_CONFIG["notes_cache_dir"])).resolve()
-        chunk_size = int(os.getenv("CHUNK_SIZE", DEFAULT_CONFIG["chunk_size"]))
+        notes_directory = Path(os.getenv("NOTES_DIRECTORY", DEFAULT_CONFIG["notes_directory"])).resolve()
+        chroma_path = Path(os.getenv("CHROMA_PATH", DEFAULT_CONFIG["chroma_path"])).resolve()
         top_k = int(os.getenv("TOP_K", str(DEFAULT_CONFIG["top_k"])))
         embedding_model = os.getenv("EMBEDDING_MODEL", DEFAULT_CONFIG["embedding_model"])
-        log_level = os.getenv("LOG_LEVEL", DEFAULT_CONFIG["log_level"])
+        server_host = os.getenv("SERVER_HOST", DEFAULT_CONFIG["server_host"])
+        server_port = int(os.getenv("SERVER_PORT", str(DEFAULT_CONFIG["server_port"])))
+        server_workers = int(os.getenv("SERVER_WORKERS", str(DEFAULT_CONFIG["server_workers"])))
+        server_timeout = int(os.getenv("SERVER_TIMEOUT", str(DEFAULT_CONFIG["server_timeout"])))
+        rebuild_cron = os.getenv("REBUILD_CRON", DEFAULT_CONFIG["rebuild_cron"])
 
         return cls(
-            ollama_host=ollama_host,
             notes_repo_url=notes_repo_url,
-            notes_cache_dir=notes_cache_dir,
-            chunk_size=chunk_size,
+            notes_directory=notes_directory,
+            chroma_path=chroma_path,
             top_k=top_k,
             embedding_model=embedding_model,
-            log_level=log_level,
+            server_host=server_host,
+            server_port=server_port,
+            server_workers=server_workers,
+            server_timeout=server_timeout,
+            rebuild_cron=rebuild_cron,
         )

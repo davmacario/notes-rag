@@ -1,14 +1,13 @@
+import asyncio
 import logging
-import threading
 from pathlib import Path
 from typing import List
 
 import chromadb.config
 from chromadb import Collection, PersistentClient
 from chromadb.api import ClientAPI
-from llama_index.core import Document, StorageContext, VectorStoreIndex
-from llama_index.core.node_parser import MarkdownNodeParser
-from llama_index.core.schema import BaseNode, NodeWithScore, TextNode
+from llama_index.core import StorageContext, VectorStoreIndex
+from llama_index.core.schema import BaseNode, TextNode
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
@@ -64,7 +63,7 @@ class Storage:
         self._extractors = extractors
 
         # TODO: actually use lock
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
         if chroma_path:
             self.chroma_path = Path(chroma_path)
@@ -102,6 +101,32 @@ class Storage:
         """Get the ChromaDB collection instance."""
         return self._client.get_collection(name=self.COLLECTION_NAME)
 
+    async def search(self, query: str, top_k: int = 5) -> List[BaseNode]:
+        """Search for similar documents.
+
+        Args:
+            query: Query text to search for.
+            top_k: Number of results to return.
+
+        Returns:
+            List of similar document nodes, sorted by similarity.
+        """
+        stripped_query = query.strip()
+        if not stripped_query:
+            return []
+
+        # Retrieve: get top_k similar docs
+        async with self._lock:
+            retriever = self._index.as_retriever(similarity_top_k=top_k)
+            nodes_with_score = retriever.retrieve(query)
+
+        logger.debug(f"Queried {top_k} nodes for query: {stripped_query!r}")
+
+        # TODO: figure out how to inject into the context
+        nodes = [n.node for n in nodes_with_score]
+
+        return nodes
+
     def add_nodes(self, nodes: List[TextNode]) -> None:
         """Add TextNodes to the vector index.
 
@@ -117,31 +142,6 @@ class Storage:
         # Insert nodes into the index, which generates embeddings via the embed_model passed at construction time
         self._index.insert_nodes(nodes)
         logger.info(f"Inserted {len(nodes)} documents with embeddings")
-
-    def search(self, query: str, top_k: int = 5) -> List[BaseNode]:
-        """Search for similar documents.
-
-        Args:
-            query: Query text to search for.
-            top_k: Number of results to return.
-
-        Returns:
-            List of similar document nodes, sorted by similarity.
-        """
-        stripped_query = query.strip()
-        if not stripped_query:
-            return []
-
-        # Retrieve: get top_k similar docs
-        retriever = self._index.as_retriever(similarity_top_k=top_k)
-        nodes_with_score = retriever.retrieve(query)
-
-        logger.debug(f"Queried {top_k} nodes for query: {stripped_query!r}")
-
-        # TODO: figure out how to inject into the context
-        nodes = [n.node for n in nodes_with_score]
-
-        return nodes
 
     # TODO: define logic to minimize downtime (rework `clear` and `rebuild`)
     # Ideally, a tmp DB is created and then it is swapped to the actual one.

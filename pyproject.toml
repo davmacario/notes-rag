@@ -13,7 +13,6 @@ dependencies = [
   "llama-index-vector-stores-chroma>=0.5.5",
   "mcp>=1.27.1",
   "pydantic>=2.12.5",
-  "pytest-asyncio>=1.3.0",
   "python-dotenv>=1.2.2",
 ]
 
@@ -27,12 +26,13 @@ packages = ["src/notes_rag"]
 [dependency-groups]
 dev = [
   "pytest>=9.0.3",
+  "pytest-asyncio>=1.3.0",
   "pyright>=1.1.408",
   "ruff>=0.15.10",
 ]
 
 [project.scripts]
-notes-rag = "notes_rag.cli:main"
+notes-rag = "notes_rag.cli:main_sync"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

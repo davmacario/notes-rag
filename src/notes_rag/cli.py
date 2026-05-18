@@ -61,7 +61,7 @@ async def main() -> None:
     )
 
     storage = Storage(config, [md_extractor])
-    webserver = MCPServer(storage)
+    webserver = MCPServer(storage, host=config.server_host, port=config.server_port)
 
     loop = asyncio.get_running_loop()
     main_task = asyncio.current_task()
@@ -81,3 +81,7 @@ async def main() -> None:
         logger.info("Stopping application")
     finally:
         logger.info("Stopped application!")
+
+# Used for script
+def main_sync():
+    asyncio.run(main())

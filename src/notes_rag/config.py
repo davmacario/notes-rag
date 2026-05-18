@@ -17,8 +17,8 @@ DEFAULT_CONFIG = {
     "notes_branch": "main",
     "chroma_path": "./.chromadb",
     "embedding_model": "all-MiniLM-L6-v2",
-    "server_host": "127.0.0.1",
-    "server_port": 8000,
+    "server_host": "0.0.0.0",
+    "server_port": 9099,
     "server_workers": 1,
     "server_timeout": 30,
     "rebuild_cron": "0 */6 * * *",
@@ -39,8 +39,8 @@ class Config:
         - NOTES_BRANCH: Git branch of the notes repository (default: "main")
         - CHROMA_PATH: Path to ChromaDB storage (default: "./.chromadb")
         - EMBEDDING_MODEL: Embedding model name (default: "all-MiniLM-L6-v2")
-        - SERVER_HOST: HTTP server host (default: "127.0.0.1")
-        - SERVER_PORT: HTTP server port (default: 8000)
+        - SERVER_HOST: HTTP server host (default: "0.0.0.0")
+        - SERVER_PORT: HTTP server port (default: 9099)
         - SERVER_WORKERS: HTTP server workers (default: 1)
         - SERVER_TIMEOUT: HTTP server timeout (default: 30)
         - REBUILD_CRON: Cron expression for rebuild schedule (default: "0 */6 * * *")

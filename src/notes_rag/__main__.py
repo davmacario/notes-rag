@@ -1,6 +1,5 @@
-import asyncio
-from notes_rag.cli import main
+from notes_rag.cli import main_sync
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main_sync()

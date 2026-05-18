@@ -1,0 +1,13 @@
+services:
+  rag:
+    image: ghcr.io/davmacario/notes-rag:latest
+    build:
+      dockerfile: ./Dockerfile
+      context: .
+    environment:
+      NOTES_REPO_URL: "https://github.com/davmacario/notes.git"
+      NOTES_BRANCH: "personal"
+      TZ: Europe/Amsterdam
+      LOG_LEVEL: "debug"
+    ports:
+      - "9099:9099"

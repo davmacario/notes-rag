@@ -8,7 +8,7 @@ from chromadb.api import ClientAPI
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.embeddings.fastembed import FastEmbedEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from notes_rag.config import Config
@@ -55,8 +55,8 @@ class TestStorage:
         return vector_store_index
 
     @pytest.fixture
-    def mocked_huggingface_embedding(self):
-        return MagicMock(spec=HuggingFaceEmbedding)
+    def mocked_fastembed_embedding(self):
+        return MagicMock(spec=FastEmbedEmbedding)
 
     @pytest.fixture
     def storage(
@@ -68,14 +68,14 @@ class TestStorage:
         mocked_chroma_vector_store: ChromaVectorStore,
         mocked_storage_context: StorageContext,
         mocked_vector_store_index: VectorStoreIndex,
-        mocked_huggingface_embedding: HuggingFaceEmbedding,
+        mocked_fastembed_embedding: FastEmbedEmbedding,
     ) -> Storage:
         """Instance of Storage with mocked components"""
         monkeypatch.setattr("notes_rag.storage.create_chroma_client", lambda *_: mocked_chroma_client)
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", lambda **_: mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", lambda **_: mocked_storage_context)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", lambda **_: mocked_vector_store_index)
-        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", lambda **_: mocked_huggingface_embedding)
+        monkeypatch.setattr("notes_rag.storage.FastEmbedEmbedding", lambda **_: mocked_fastembed_embedding)
         return Storage(mock_config, [mocked_md_extractor])
 
     # --- __init__ ---
@@ -90,7 +90,7 @@ class TestStorage:
         mocked_chroma_vector_store: ChromaVectorStore,
         mocked_storage_context: StorageContext,
         mocked_vector_store_index: VectorStoreIndex,
-        mocked_huggingface_embedding: HuggingFaceEmbedding,
+        mocked_fastembed_embedding: FastEmbedEmbedding,
         mocked_chroma_collection: Collection,
     ):
         mock_create_chroma_client = MagicMock(return_value=mocked_chroma_client)
@@ -101,8 +101,8 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
         mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
-        mock_huggingface_embedding_factory = MagicMock(return_value=mocked_huggingface_embedding)
-        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", mock_huggingface_embedding_factory)
+        mock_fastembed_embedding_factory = MagicMock(return_value=mocked_fastembed_embedding)
+        monkeypatch.setattr("notes_rag.storage.FastEmbedEmbedding", mock_fastembed_embedding_factory)
 
         with caplog.at_level(logging.INFO):
             storage = Storage(mock_config, [mocked_md_extractor])
@@ -119,10 +119,10 @@ class TestStorage:
         assert storage._vector_store == mocked_chroma_vector_store
         mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
         assert storage._storage_context == mocked_storage_context
-        mock_huggingface_embedding_factory.assert_called_once_with(model_name=mock_config.embedding_model)
-        assert storage._embed_model == mocked_huggingface_embedding
+        mock_fastembed_embedding_factory.assert_called_once_with(model_name=mock_config.embedding_model)
+        assert storage._embed_model == mocked_fastembed_embedding
         mock_vector_store_index_factory.assert_called_once_with(
-            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_fastembed_embedding
         )
         assert f"Initialized ChromaDB at {str(mock_config.chroma_path)!r}" in caplog.text
 
@@ -181,7 +181,7 @@ class TestStorage:
         mocked_chroma_vector_store,
         mocked_storage_context,
         mocked_vector_store_index,
-        mocked_huggingface_embedding,
+        mocked_fastembed_embedding,
     ):
         # mocked_chroma_client.delete_collection = MagicMock()
 
@@ -192,8 +192,8 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", mock_storage_context_from_defaults)
         mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
-        mock_huggingface_embedding_factory = MagicMock(return_value=mocked_huggingface_embedding)
-        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", mock_huggingface_embedding_factory)
+        mock_fastembed_embedding_factory = MagicMock(return_value=mocked_fastembed_embedding)
+        monkeypatch.setattr("notes_rag.storage.FastEmbedEmbedding", mock_fastembed_embedding_factory)
 
         with caplog.at_level(logging.INFO):
             await storage.clear()
@@ -203,9 +203,9 @@ class TestStorage:
         mocked_chroma_client.create_collection.assert_called_once_with(name=storage.COLLECTION_NAME)
         mock_chroma_vector_store_factory.assert_called_once_with(chroma_collection=mocked_chroma_collection)
         mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
-        mock_huggingface_embedding_factory.assert_not_called()  # Reusing existing one - class attribute
+        mock_fastembed_embedding_factory.assert_not_called()  # Reusing existing one - class attribute
         mock_vector_store_index_factory.assert_called_once_with(
-            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_fastembed_embedding
         )
 
     # --- rebuild ---
@@ -221,7 +221,7 @@ class TestStorage:
         mocked_chroma_vector_store,
         mocked_storage_context,
         mocked_vector_store_index,
-        mocked_huggingface_embedding,
+        mocked_fastembed_embedding,
     ):
         nodes = [
             TextNode(text="Chunk 1", metadata={"source_file": "doc1.md"}),
@@ -264,7 +264,7 @@ class TestStorage:
         mock_chroma_vector_store_factory.assert_called_with(chroma_collection=mocked_chroma_collection)
         mock_storage_context_from_defaults.assert_called_with(vector_store=mocked_chroma_vector_store)
         mock_vector_store_index_factory.assert_called_with(
-            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_huggingface_embedding
+            nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_fastembed_embedding
         )
         assert "Rebuild complete: 1 files, 2 nodes indexed" in caplog.text
 
@@ -317,13 +317,13 @@ class TestStorage:
         mocked_chroma_vector_store,
         mocked_storage_context,
         mocked_vector_store_index,
-        mocked_huggingface_embedding,
+        mocked_fastembed_embedding,
     ):
         monkeypatch.setattr("notes_rag.storage.create_chroma_client", lambda *_: mocked_chroma_client)
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", lambda **_: mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", lambda **_: mocked_storage_context)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", lambda **_: mocked_vector_store_index)
-        monkeypatch.setattr("notes_rag.storage.HuggingFaceEmbedding", lambda **_: mocked_huggingface_embedding)
+        monkeypatch.setattr("notes_rag.storage.FastEmbedEmbedding", lambda **_: mocked_fastembed_embedding)
 
         storage_no_extractors = Storage(mock_config, [])
 
@@ -359,7 +359,7 @@ class TestStorage:
         mocked_chroma_vector_store,
         mocked_storage_context,
         mocked_vector_store_index,
-        mocked_huggingface_embedding,
+        mocked_fastembed_embedding,
     ):
         nodes_a = [TextNode(text="A1", metadata={"source_file": "a.md"})]
         nodes_b = [

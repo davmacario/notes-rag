@@ -4,10 +4,11 @@ services:
     build:
       dockerfile: ./Dockerfile
       context: .
+    env_file: .env
     environment:
-      NOTES_REPO_URL: "https://github.com/davmacario/notes.git"
-      NOTES_BRANCH: "personal"
+      NOTES_DIRECTORY: ./notes_cache
+      REBUILD_CRON: "0 */6 * * *"
       TZ: Europe/Amsterdam
       LOG_LEVEL: "debug"
     ports:
-      - "9099:9099"
+      - "127.0.0.1:9099:9099"

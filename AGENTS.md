@@ -9,7 +9,7 @@ Python vector retrieval service for markdown notes, exposing a `/query_rag` HTTP
 - **Runtime**: Python 3.14+
 - **Framework**: FastMCP (MCP server), LlamaIndex (RAG orchestration)
 - **Vector DB**: ChromaDB (local, persisted in `./.chromadb/` by default)
-- **Embeddings**: `llama-index-embeddings-huggingface` with `all-MiniLM-L6-v2`
+- **Embeddings**: `llama-index-embeddings-fastembed` (ONNX, no torch) with `sentence-transformers/all-MiniLM-L6-v2`
 - **CLI**: argparse (in `cli.py`)
 - **Cron parsing**: `cron_converter`
 - **Git**: GitPython (`sub/git_manager.py`)
@@ -45,7 +45,7 @@ Optional (defaults shown):
 export NOTES_DIRECTORY="./notes-cache"
 export CHROMA_PATH="./.chromadb"
 export TOP_K=5
-export EMBEDDING_MODEL="all-MiniLM-L6-v2"
+export EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
 export SERVER_HOST="127.0.0.1"
 export SERVER_PORT=8000
 export SERVER_WORKERS=1
@@ -113,7 +113,7 @@ uv.lock                    # Dependency lockfile
 - **Don't commit tokens**: `NOTES_TOKEN` never committed; use env vars
 - **Match embedding models**: Embedding model must be identical between indexing and querying
 - **Embedding**: `Storage` uses LlamaIndex `VectorStoreIndex.insert_nodes()` to generate embeddings — never manually
-- **Embedding model**: `llama-index-embeddings-huggingface` with `all-MiniLM-L6-v2`, passed to `VectorStoreIndex` via `embed_model` parameter
+- **Embedding model**: `llama-index-embeddings-fastembed` (ONNX runtime) with `sentence-transformers/all-MiniLM-L6-v2`, passed to `VectorStoreIndex` via `embed_model` parameter
 - **ChromaDB path**: Default is `.chromadb/`, overridable via `CHROMA_PATH`
 
 ## Daemon Workflow

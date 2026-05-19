@@ -140,7 +140,7 @@ class BaseExtractor(ABC):
 | `notes_branch`    | str  | No       | `NOTES_BRANCH`    | `main`             |
 | `chroma_path`     | Path | No       | `CHROMA_PATH`     | `./.chromadb`      |
 | `top_k`           | int  | No       | `TOP_K`           | `5`                |
-| `embedding_model` | str  | No       | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` |
+| `embedding_model` | str  | No       | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` |
 | `server_host`     | str  | No       | `SERVER_HOST`     | `127.0.0.1`        |
 | `server_port`     | int  | No       | `SERVER_PORT`     | `8000`             |
 | `server_workers`  | int  | No       | `SERVER_WORKERS`  | `1`                |
@@ -182,7 +182,7 @@ Default: `"0 */6 * * *"` (every 6 hours)
    - Set source_file metadata on each TextNode
    ↓
 6. Storage.add_nodes() calls VectorStoreIndex.insert_nodes()
-   - Embeddings generated locally via HuggingFaceEmbedding
+   - Embeddings generated locally via FastEmbedEmbedding (ONNX runtime)
    ↓
 7. Atomically swap _client, _chroma_collection, _vector_store, _storage_context, _index
    ↓
@@ -205,7 +205,7 @@ Default: `"0 */6 * * *"` (every 6 hours)
 | --------------------- | ------------------- | ----------------------------------------------------- |
 | **Framework**         | FastAPI             | Async-native, minimal boilerplate, auto-docs          |
 | **Vector DB**         | ChromaDB            | Local-first, Python-native, minimal setup             |
-| **Embedding Model**   | `all-MiniLM-L6-v2`  | Fast, lightweight (~90MB), good quality for retrieval |
+| **Embedding Model**   | `sentence-transformers/all-MiniLM-L6-v2` (via FastEmbed/ONNX) | Fast, lightweight (~90MB), good quality for retrieval; no torch dependency |
 | **Extractor Pattern** | Passive, list-based | Simple, no threading, each extractor owns its state   |
 | **Rebuild**           | Full + atomic swap  | Consistent indexing, zero-downtime queries            |
 | **Cron Library**      | `cron_converter`    | Lightweight, standard crontab support                 |
@@ -238,7 +238,7 @@ Default: `"0 */6 * * *"` (every 6 hours)
 
 ## Performance Considerations
 
-- **Embedding model**: `all-MiniLM-L6-v2` is fast (~1ms/chunk) and memory-efficient
+- **Embedding model**: `sentence-transformers/all-MiniLM-L6-v2` via FastEmbed (ONNX) is fast (~1ms/chunk) and memory-efficient
 - **ChromaDB**: Persists to disk at `CHROMA_PATH`
 - **Atomic swap**: Lock held only for microseconds during reference swap
 - **asyncio.to_thread()**: Blocking git/embedding operations run off the event loop

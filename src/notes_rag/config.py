@@ -16,7 +16,7 @@ DEFAULT_CONFIG = {
     "notes_directory": "./notes-cache",
     "notes_branch": "main",
     "chroma_path": "./.chromadb",
-    "embedding_model": "all-MiniLM-L6-v2",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
     "server_host": "0.0.0.0",
     "server_port": 9099,
     "server_workers": 1,
@@ -38,7 +38,7 @@ class Config:
         - NOTES_DIRECTORY: Local cache directory (default: "./notes-cache")
         - NOTES_BRANCH: Git branch of the notes repository (default: "main")
         - CHROMA_PATH: Path to ChromaDB storage (default: "./.chromadb")
-        - EMBEDDING_MODEL: Embedding model name (default: "all-MiniLM-L6-v2")
+        - EMBEDDING_MODEL: Embedding model name (default: "sentence-transformers/all-MiniLM-L6-v2")
         - SERVER_HOST: HTTP server host (default: "0.0.0.0")
         - SERVER_PORT: HTTP server port (default: 9099)
         - SERVER_WORKERS: HTTP server workers (default: 1)

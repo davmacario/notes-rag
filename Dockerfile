@@ -44,6 +44,7 @@ apt-get install -qyy \
     -o APT::Install-Recommends=false \
     -o APT::Install-Suggests=false \
     git \
+    openssh-client \
     ca-certificates
 
 apt-get clean

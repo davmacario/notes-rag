@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the plan for building a local vector retrieval service for markdown notes. The system indexes notes from a private GitHub repository into a local vector database and exposes a `/query_rag` HTTP endpoint for MCP servers to inject retrieved context into LLM prompts. This is retrieval-only — no LLM generation.
+This document outlines the plan for building a local vector retrieval service for markdown notes. The system indexes notes from a private GitHub repository into a local vector database and exposes a `/mcp` HTTP endpoint for MCP client to inject retrieved context into LLM prompts. This is retrieval-only — no LLM generation.
 
 ## Goals
 
@@ -10,7 +10,7 @@ This document outlines the plan for building a local vector retrieval service fo
 - **No external providers**: Avoid cloud APIs
 - **Efficient retrieval**: Chunk-based indexing with semantic search via ChromaDB
 - **Scheduled rebuild**: Cron-based indexing of markdown notes from Git
-- **HTTP API**: Expose `/query_rag` endpoint for MCP context injection
+- **HTTP API**: Expose `/mcp` endpoint for MCP, allowing context injection
 - **Retrieval-only**: Return formatted text, not LLM responses
 
 ## Architecture
@@ -29,9 +29,9 @@ This document outlines the plan for building a local vector retrieval service fo
               ┌────────────┴───────────┐
               │                        │
        ┌──────▼──────┐          ┌──────▼──────┐
-       │ Rebuild     │          │ HTTPServer  │
-       │ Loop        │          │ FastAPI     │
-       │ (cron)      │          │ /query_rag  │
+       │ Rebuild     │          │ MCPServer   │
+       │ Loop        │          │ FastMCP     │
+       │ (cron)      │          │ /mcp        │
        └──────┬──────┘          └─────────────┘
               │
        ┌──────▼──────┐
@@ -51,7 +51,7 @@ This document outlines the plan for building a local vector retrieval service fo
 | --------------------- | ----------------------------------------------------------------------- |
 | **CLI**               | argparse-based entry point, daemon mode with rebuild loop + HTTP server |
 | **Rebuild Loop**      | Cron-scheduled full rebuild, atomic swap for zero-downtime              |
-| **HTTPServer**        | FastAPI server exposing `/query_rag` POST endpoint                      |
+| **MCPServer**         | FastMCP server exposing `/mcp` endpoint, supporting streamable-HTTP     |
 | **Storage**           | ChromaDB orchestration, extractor management, retrieval, atomic swap    |
 | **Extractor**         | Abstract base class for document ingestion (passive, no threads)        |
 | **MarkdownExtractor** | Concrete Extractor for `.md` files (clone/pull, parse, chunk)           |
@@ -89,7 +89,7 @@ class BaseExtractor(ABC):
 1. CLI parses args (`--verbose`, `--only-rebuild`, `--only-rebuild-once`, `--immediate`)
 2. `Config.from_env()` loads all configuration
 3. `Storage` initialized with list of `Extractor` objects
-4. `HTTPServer` initialized with `Storage`
+4. `MCPServer` initialized with `Storage`
 5. `asyncio.gather()` starts rebuild loop + `server.serve()`
 6. If `--immediate` set, kick off initial rebuild
 
@@ -129,29 +129,6 @@ class BaseExtractor(ABC):
 2. Stop rebuild loop
 3. Exit
 
-## HTTP Endpoint
-
-### POST `/query_rag`
-
-**Request**:
-
-```json
-{
-  "query": "What is the architecture of the system?",
-  "num_docs": 5
-}
-```
-
-**Response**:
-
-```json
-{
-  "response": "--- [source: notes/architecture.md] ---\nThe system uses FastAPI for the HTTP layer...\n\n--- [source: notes/deployment.md] ---\nDeployment is handled via uvicorn..."
-}
-```
-
-**Response Format**: Delimited text with `[source: path]` markers per chunk. LLMs are trained on this pattern extensively — it is explicit, parsable, and avoids JSON encoding overhead.
-
 ## Configuration
 
 ### Config Dataclass
@@ -160,6 +137,7 @@ class BaseExtractor(ABC):
 | ----------------- | ---- | -------- | ----------------- | ------------------ |
 | `notes_repo_url`  | str  | Yes      | `NOTES_REPO_URL`  | —                  |
 | `notes_directory` | Path | No       | `NOTES_DIRECTORY` | `./notes-cache`    |
+| `notes_branch`    | str  | No       | `NOTES_BRANCH`    | `main`             |
 | `chroma_path`     | Path | No       | `CHROMA_PATH`     | `./.chromadb`      |
 | `top_k`           | int  | No       | `TOP_K`           | `5`                |
 | `embedding_model` | str  | No       | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` |
@@ -168,6 +146,7 @@ class BaseExtractor(ABC):
 | `server_workers`  | int  | No       | `SERVER_WORKERS`  | `1`                |
 | `server_timeout`  | int  | No       | `SERVER_TIMEOUT`  | `30`               |
 | `rebuild_cron`    | str  | No       | `REBUILD_CRON`    | `"0 */6 * * *"`    |
+| `tz`              | str  | No       | `TZ`              | `Europe/Amsterdam` |
 
 ### CLI Arguments
 
@@ -271,8 +250,8 @@ Default: `"0 */6 * * *"` (every 6 hours)
 2. **storage.py** — ChromaDB orchestration, extractor management, atomic swap rebuild, retrieval
 3. **extractor/abstract.py** — `BaseExtractor`, `ExtractorResult`
 4. **extractor/markdown_extractor.py** — `MarkdownExtractor` (git, parse, chunk)
-5. **webserver.py** — `HTTPServer`, `/query_rag` endpoint, delimited text formatting
+5. **mcp_server.py** — `MCPServer` class implementing the MCP server protocol interface
 6. **cli.py** — Argparse, daemon loop (`asyncio.gather`), cron scheduling, flags
 7. **sub/git_manager.py** — Git operations wrapper (clone, checkout, fetch, pull, status)
-8. **pyproject.toml** — Dependencies (add `cron_converter`)
+8. **pyproject.toml** — Dependencies
 9. **tests/** — Unit tests for storage, webserver, CLI, git_manager

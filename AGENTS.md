@@ -87,7 +87,7 @@ export LOG_LEVEL="INFO"
 ```text
 ./src/notes_rag/           # Application source code
   __init__.py              # Package init
-  __main__.py              # Entry point for `python -m notes_rag.cli`
+  __main__.py              # Entry point for `python -m notes_rag`
   cli.py                   # CLI entry point (argparse, daemon loop + server launch)
   config.py                # Config dataclass, env var loading with `from_env()`
   storage.py               # ChromaDB client, atomic swap rebuild, retrieval
@@ -136,7 +136,7 @@ uv.lock                    # Dependency lockfile
 
 **Query flow**:
 
-1. HTTP POST `/query_rag` with `{"query": "...", "num_docs": N}`
+1. MCP request to `/mcp` endpoint (via Streamable-HTTP)
 2. `Storage.search()` retrieves top-k nodes
 3. Format as delimited text:
 

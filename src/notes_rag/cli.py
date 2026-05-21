@@ -26,11 +26,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Enable DEBUG logging level",
     )
+    parser.add_argument(
+        "--rebuild-on-start",
+        action="store_true",
+        default=False,
+        help="Trigger a VectorDB rebuild immediately on startup (default: wait for first cron slot)",
+    )
     return parser.parse_args(argv)
 
 
-async def run_storage_loop(storage: Storage, cron: str, timezone: str):
+async def run_storage_loop(storage: Storage, cron: str, timezone: str, rebuild_on_start: bool = False):
     schedule = Cron(cron).schedule(timezone_str=timezone)
+    if not rebuild_on_start:
+        next_run_datetime = schedule.next()
+        logger.info(f"First run scheduled for {next_run_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+        sleep_duration = next_run_datetime.timestamp() - datetime.now().timestamp()
+        await asyncio.sleep(sleep_duration)
     while True:
         await storage.rebuild()
         next_run_datetime = schedule.next()
@@ -76,7 +87,10 @@ async def main() -> None:
         loop.add_signal_handler(sig, handle_signal)
 
     try:
-        await asyncio.gather(run_storage_loop(storage, config.rebuild_cron, config.timezone), webserver.run())
+        await asyncio.gather(
+            run_storage_loop(storage, config.rebuild_cron, config.timezone, rebuild_on_start=args.rebuild_on_start),
+            webserver.run(),
+        )
     except asyncio.CancelledError:
         logger.info("Stopping application")
     finally:

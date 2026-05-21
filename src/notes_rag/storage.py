@@ -120,15 +120,13 @@ class Storage:
             self._reset_llamaindex()
             logger.info(f"Cleared collection {self.COLLECTION_NAME}")
 
-    async def rebuild(self) -> int:
+    async def rebuild(self) -> None:
         """Rebuild the vector index by iterating over all extractors.
 
         Clears the collection, calls each extractor's rebuild() method,
         and stores the returned nodes in ChromaDB with embeddings.
-
-        Returns:
-            number of files processed
         """
+        logger.info("Rebuilding vector DB")
 
         tmp_collection_name = f"tmp_{self.COLLECTION_NAME}"
         tmp_collection = self._client.get_or_create_collection(tmp_collection_name)
@@ -141,17 +139,15 @@ class Storage:
             embed_model=self._embed_model,
         )
 
-        files_processed = 0
         nodes_count = 0
         for extractor in self._extractors:
-            extractor_result = extractor.get_nodes()
-            files_processed += extractor_result.files_processed
-            if extractor_result.nodes:
-                await tmp_index.ainsert_nodes(extractor_result.nodes)
-                nodes_count += len(extractor_result.nodes)
+            for nodes_batch in extractor.get_nodes(batch_size=400):
+                await tmp_index.ainsert_nodes(nodes_batch)
+                logger.debug(f"Added {len(nodes_batch)} nodes to vector db")
+                nodes_count += len(nodes_batch)
 
         if nodes_count:
-            logger.info(f"Rebuild complete: {files_processed} files, {nodes_count} nodes indexed")
+            logger.info(f"Rebuild complete: {nodes_count} nodes indexed")
         else:
             logger.warning("No nodes to be indexed!")
 
@@ -165,5 +161,3 @@ class Storage:
             logger.debug(f"Copied {count} records to main collection")
 
             self._reset_llamaindex()
-
-        return files_processed

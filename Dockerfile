@@ -65,4 +65,4 @@ WORKDIR /app
 
 EXPOSE 9099
 
-ENTRYPOINT ["python3", "-m", "notes_rag"]
+ENTRYPOINT ["notes-rag"]

@@ -1,0 +1,83 @@
+name: PR pipeline
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run Python unit tests
+        run: uv run pytest
+
+      - name: Verify image builds
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
+  release-preview:
+    name: Preview next release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # --no-ci is required: semantic-release otherwise bails out early on
+      # pull_request events, before it ever analyses the commits.
+      # --branches overrides the `main`-only config so the PR branch is allowed.
+      - name: semantic-release --dry-run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -o pipefail
+          npm run release:dry -- --branches "$HEAD_REF" 2>&1 \
+            | tee /tmp/semantic-release.log
+
+      - name: Report next version
+        if: always()
+        run: |
+          {
+            echo "## Release preview"
+            echo
+            if [ -f .release-version ]; then
+              echo "Merging this PR will publish **v$(cat .release-version)**."
+            else
+              echo "No release will be created"
+            fi
+            echo
+            echo "<details><summary>semantic-release dry-run log</summary>"
+            echo
+            echo '```'
+            cat /tmp/semantic-release.log 2>/dev/null || echo '(no log captured)'
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,23 @@
+{
+  "name": "notes-rag",
+  "version": "0.0.0-managed-by-semantic-release",
+  "private": true,
+  "description": "Release tooling for notes-rag",
+  "license": "MIT",
+  "scripts": {
+    "release": "semantic-release",
+    "release:dry": "semantic-release --dry-run --no-ci"
+  },
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "conventional-changelog-conventionalcommits": "^9.3.1",
+    "@semantic-release/release-notes-generator": "^14.1.1",
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/github": "^12.0.9",
+    "semantic-release": "^25.0.9"
+  },
+  "engines": {
+    "node": ">=22.23.2"
+  }
+}
+

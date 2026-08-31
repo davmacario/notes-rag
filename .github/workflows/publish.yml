@@ -1,0 +1,102 @@
+name: Publish release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      published: ${{ steps.out.outputs.published }}
+      version: ${{ steps.out.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release
+
+      - name: Display released version
+        id: out
+        run: |
+          if [ -f .release-version ]; then
+            version="$(cat .release-version)"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "### Released v$version" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "### No release: no features/bugfixes/breaking changes since last" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish:
+    # Always update
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # Publish image
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only use semver tags if a release happened
+      - name: Derive Docker tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/dmhosted-blog
+          tags: |
+            type=sha,format=long,prefix=
+            type=raw,value={{date 'YYYYMMDD'}}-{{sha}}
+            type=raw,value=latest
+            type=semver,pattern=v{{version}},value=v${{ needs.release.outputs.version }},enable=${{ needs.release.outputs.published == 'true' }}
+            type=semver,pattern=v{{major}}.{{minor}},value=v${{ needs.release.outputs.version }},enable=${{ needs.release.outputs.published == 'true' }}
+            type=semver,pattern=v{{major}},value=v${{ needs.release.outputs.version }},enable=${{ needs.release.outputs.published == 'true' }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Summary
+        run: |
+          echo "### Published" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

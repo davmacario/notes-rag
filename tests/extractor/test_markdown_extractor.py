@@ -66,7 +66,7 @@ class TestMarkdownExtractor:
     def test_get_nodes(self, caplog, monkeypatch, md_extractor):
 
         with caplog.at_level(logging.DEBUG):
-            out = list(md_extractor.get_nodes(chunk_size=2))
+            out = list(md_extractor.get_nodes(batch_size=2))
 
         assert len(out) == 3
         assert len(out[-1]) == 1

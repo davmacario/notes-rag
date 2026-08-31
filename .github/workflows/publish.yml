@@ -78,7 +78,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/dmhosted-blog
+          images: ghcr.io/${{ github.repository_owner }}/notes-rag
           tags: |
             type=sha,format=long,prefix=
             type=raw,value={{date 'YYYYMMDD'}}-{{sha}}

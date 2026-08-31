@@ -44,6 +44,7 @@ apt-get install -qyy \
     -o APT::Install-Recommends=false \
     -o APT::Install-Suggests=false \
     git \
+    openssh-client \
     ca-certificates
 
 apt-get clean
@@ -64,4 +65,4 @@ WORKDIR /app
 
 EXPOSE 9099
 
-ENTRYPOINT ["python3", "-m", "notes_rag"]
+ENTRYPOINT ["notes-rag"]

@@ -1,17 +1,20 @@
 import logging
 from pathlib import Path
-from typing import List
+from typing import Generator, List
 
+import git
 from llama_index.core.node_parser import MarkdownNodeParser
+from llama_index.core.schema import TextNode
 from llama_index.readers.file import MarkdownReader
 
-from notes_rag.extractor.abstract import BaseExtractor, ExtractorResult
+from notes_rag.extractor.abstract import BaseExtractor
 from notes_rag.sub.git_manager import GitManager
 
 logger = logging.getLogger(__name__)
 
 
 # TODO: figure out a way to remove YAML header from markdown files that have them
+
 
 class MarkdownExtractor(BaseExtractor):
     def __init__(
@@ -62,20 +65,18 @@ class MarkdownExtractor(BaseExtractor):
 
         return self._git.pull()
 
-    def get_nodes(self) -> ExtractorResult:
-        """Process markdown files and return nodes ready to be submitted for embedding by Storage.
-
-        Walks through the notes directory recursively, parses .md files, chunks them,
-        and returns the TextNodes. Storage will handle embedding and storing.
-
-        Returns:
-            ExtractorResult object
-        """
+    def get_nodes(self, batch_size: int | None = None) -> Generator[List[TextNode], None, None]:
         self._init_or_restore_notes_repo()
-        self._fetch_latest_notes()
+        try:
+            self._fetch_latest_notes()
+        except git.GitCommandError:
+            # This will happen if mounting a local clone of a private git repo on the container (unless valid
+            # credentials are provided)
+            # If here, it means that the directory is available locally.
+            logger.error("Unable to fetch latest changes! Will use existing copy of the repository.")
 
         if not self.notes_directory.exists():
-            return ExtractorResult(nodes=[], files_processed=0)
+            raise FileNotFoundError("Local copy of repository was not found!")
 
         md_files: List[Path] = []
         for file_path in self.notes_directory.rglob("*.md"):
@@ -83,17 +84,26 @@ class MarkdownExtractor(BaseExtractor):
                 md_files.append(file_path)
 
         if not md_files:
-            return ExtractorResult(nodes=[], files_processed=0)
+            logger.warning("No Markdown documents were found!")
+            return
 
         md_reader = MarkdownReader(remove_hyperlinks=True, remove_images=True)
         node_parser = MarkdownNodeParser()
 
-        all_nodes = []
+        count_nodes = 0
+        return_chunk = []
         for file_path in md_files:
             file_docs = md_reader.load_data(str(file_path))
             nodes = node_parser.get_nodes_from_documents(file_docs)
-            for node in nodes:
-                node.metadata["source_file"] = str(file_path.relative_to(self.notes_directory))
-            all_nodes.extend(nodes)
 
-        return ExtractorResult(nodes=all_nodes, files_processed=len(md_files))
+            # Add enough nodes to
+            for node in nodes:
+                count_nodes += 1
+                node.metadata["source_file"] = str(file_path.relative_to(self.notes_directory))
+                return_chunk.append(node)
+
+                if batch_size and len(return_chunk) >= batch_size:
+                    yield return_chunk
+                    return_chunk = []
+        yield return_chunk
+        logger.debug(f"MarkdownExtractor extracted {count_nodes} nodes from {len(md_files)} files")

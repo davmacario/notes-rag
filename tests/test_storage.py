@@ -1,5 +1,4 @@
 import logging
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
@@ -12,7 +11,6 @@ from llama_index.embeddings.fastembed import FastEmbedEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from notes_rag.config import Config
-from notes_rag.extractor.abstract import ExtractorResult
 from notes_rag.extractor.markdown_extractor import MarkdownExtractor
 from notes_rag.storage import Storage
 
@@ -227,8 +225,7 @@ class TestStorage:
             TextNode(text="Chunk 1", metadata={"source_file": "doc1.md"}),
             TextNode(text="Chunk 2", metadata={"source_file": "doc1.md"}),
         ]
-        extractor_result = ExtractorResult(nodes=nodes, files_processed=1)
-        mocked_md_extractor.get_nodes.return_value = extractor_result
+        mocked_md_extractor.get_nodes.return_value = [nodes]
 
         tmp_collection = MagicMock(spec=Collection)
         call_count = [0]
@@ -252,9 +249,8 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.INFO):
-            result = await storage.rebuild()
+            await storage.rebuild()
 
-        assert result == 1
         mocked_md_extractor.get_nodes.assert_called_once()
         mocked_vector_store_index.ainsert_nodes.assert_called_once_with(nodes)
         mocked_chroma_client.delete_collection.assert_called_with(storage.COLLECTION_NAME)
@@ -266,7 +262,7 @@ class TestStorage:
         mock_vector_store_index_factory.assert_called_with(
             nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_fastembed_embedding
         )
-        assert "Rebuild complete: 1 files, 2 nodes indexed" in caplog.text
+        assert "Rebuild complete: 2 nodes indexed" in caplog.text
 
     async def test_rebuild_no_nodes(
         self,
@@ -280,8 +276,7 @@ class TestStorage:
         mocked_storage_context,
         mocked_vector_store_index,
     ):
-        extractor_result = ExtractorResult(nodes=[], files_processed=0)
-        mocked_md_extractor.get_nodes.return_value = extractor_result
+        mocked_md_extractor.get_nodes.return_value = []
 
         tmp_collection = MagicMock(spec=Collection)
         mocked_chroma_client.get_or_create_collection.side_effect = [
@@ -300,9 +295,8 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.WARNING):
-            result = await storage.rebuild()
+            await storage.rebuild()
 
-        assert result == 0
         mocked_md_extractor.get_nodes.assert_called_once()
         mocked_vector_store_index.ainsert_nodes.assert_not_called()
         assert "No nodes to be indexed!" in caplog.text
@@ -343,9 +337,8 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.WARNING):
-            result = await storage_no_extractors.rebuild()
+            await storage_no_extractors.rebuild()
 
-        assert result == 0
         assert "No nodes to be indexed!" in caplog.text
 
     async def test_rebuild_multiple_extractors(
@@ -366,12 +359,10 @@ class TestStorage:
             TextNode(text="B1", metadata={"source_file": "b.md"}),
             TextNode(text="B2", metadata={"source_file": "b.md"}),
         ]
-        extractor_result_a = ExtractorResult(nodes=nodes_a, files_processed=1)
-        extractor_result_b = ExtractorResult(nodes=nodes_b, files_processed=2)
         ext_a = MagicMock(spec=MarkdownExtractor)
-        ext_a.get_nodes.return_value = extractor_result_a
+        ext_a.get_nodes.return_value = [nodes_a]
         ext_b = MagicMock(spec=MarkdownExtractor)
-        ext_b.get_nodes.return_value = extractor_result_b
+        ext_b.get_nodes.return_value = [nodes_b]
 
         storage._extractors = [ext_a, ext_b]
 
@@ -398,10 +389,9 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
 
         with caplog.at_level(logging.INFO):
-            result = await storage.rebuild()
+            await storage.rebuild()
 
-        assert result == 3
         assert ext_a.get_nodes.call_count == 1
         assert ext_b.get_nodes.call_count == 1
         assert mocked_vector_store_index.ainsert_nodes.call_count == 2
-        assert "Rebuild complete: 3 files, 3 nodes indexed" in caplog.text
+        assert "Rebuild complete: 3 nodes indexed" in caplog.text

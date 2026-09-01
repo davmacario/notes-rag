@@ -2,7 +2,7 @@
 
 ## Project Type
 
-Python vector retrieval service for markdown notes, exposing a `/query_rag` HTTP endpoint for MCP context injection. No LLM integration — returns retrieved chunks as formatted text for the calling MCP server to inject into LLM prompts.
+Python vector retrieval service for markdown notes, exposing a `query_notes` MCP tool (FastMCP, Streamable-HTTP transport) for context injection. No LLM integration — returns retrieved chunks as formatted text for the calling MCP client to inject into LLM prompts.
 
 ## Stack
 
@@ -19,10 +19,9 @@ Python vector retrieval service for markdown notes, exposing a `/query_rag` HTTP
 
 ```bash
 # Development
-uv run python -m notes_rag                     # Run MCP server + rebuild loop
-uv run python -m notes_rag --verbose           # Enable DEBUG logging
-uv run python -m notes_rag --only-rebuild      # Rebuild loop only, no MCP server
-uv run python -m notes_rag --only-rebuild-once # Single rebuild, then exit
+uv run python -m notes_rag                      # Run MCP server + rebuild loop
+uv run python -m notes_rag --verbose            # Enable DEBUG logging
+uv run python -m notes_rag --rebuild-on-start   # Rebuild immediately on startup instead of waiting for first cron slot
 
 # Setup
 uv sync              # Install dependencies
@@ -43,16 +42,19 @@ Optional (defaults shown):
 
 ```bash
 export NOTES_DIRECTORY="./notes-cache"
+export NOTES_BRANCH="main"
 export CHROMA_PATH="./.chromadb"
-export TOP_K=5
 export EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
-export SERVER_HOST="127.0.0.1"
-export SERVER_PORT=8000
+export SERVER_HOST="0.0.0.0"
+export SERVER_PORT=9099
 export SERVER_WORKERS=1
 export SERVER_TIMEOUT=30
 export REBUILD_CRON="0 */6 * * *"
+export TZ="Europe/Amsterdam"
 export LOG_LEVEL="INFO"
 ```
+
+Note: there is no `TOP_K` env var — the number of results per query (`num_docs`) is chosen by the MCP client on each `query_notes` call.
 
 ## Development Workflow
 
@@ -69,8 +71,8 @@ export LOG_LEVEL="INFO"
 - **Local only**: All embedding generation happens locally
 - **Retrieval-only**: No LLM calls — this service only returns documents for MCP to inject
 - **ChromaDB persistence**: Stored in `.chromadb/` directory (gitignored)
-- **Storage receives list of `Extractor` objects at initialization** for document ingestion
-- **Extractors return `ExtractorResult` to Storage**: Each `Extractor` handles its own parsing and chunking, producing `TextNode` objects that `Storage` passes to `VectorStoreIndex.insert_nodes()` without re-parsing
+- **Storage receives list of `BaseExtractor` objects at initialization** for document ingestion
+- **Extractors yield `TextNode` batches to Storage**: Each `BaseExtractor.get_nodes()` handles its own parsing and chunking, yielding batches of `TextNode` objects that `Storage.rebuild()` passes to `VectorStoreIndex.ainsert_nodes()` without re-parsing
 - **Testing conventions**:
   - Use `pytest` as much as possible, especially built-in fixtures (e.g., `monkeypatch`, `caplog`)
   - For mocking objects, use `unittest.mock.MagicMock`
@@ -91,19 +93,22 @@ export LOG_LEVEL="INFO"
   cli.py                   # CLI entry point (argparse, daemon loop + server launch)
   config.py                # Config dataclass, env var loading with `from_env()`
   storage.py               # ChromaDB client, atomic swap rebuild, retrieval
-  webserver.py             # FastAPI HTTP server with /query_rag endpoint
+  mcp_server.py            # FastMCP server exposing the `query_notes` tool
   logging_config.py        # Logging setup with StreamHandler
   extractor/
-    abstract.py            # BaseExtractor (ABC) and ExtractorResult dataclass
+    abstract.py            # BaseExtractor (ABC)
     markdown_extractor.py  # MarkdownExtractor: git clone/pull, MarkdownNodeParser chunking
   sub/
     git_manager.py         # Git operations wrapper (clone, checkout, fetch, pull, status)
+    storage_utils.py       # ChromaDB client factory + collection copy helper (used for atomic rebuild swap)
 ./tests/                   # Unit tests
   conftest.py              # pytest fixtures (setup_env, mock_config)
   test_storage.py
-  test_webserver.py
+  extractor/
+    test_markdown_extractor.py
   sub/
     test_git_manager.py
+    test_storage_utils.py
 pyproject.toml             # uv/hatch project config, CLI script `notes-rag`
 uv.lock                    # Dependency lockfile
 ```
@@ -112,7 +117,7 @@ uv.lock                    # Dependency lockfile
 
 - **Don't commit tokens**: `NOTES_TOKEN` never committed; use env vars
 - **Match embedding models**: Embedding model must be identical between indexing and querying
-- **Embedding**: `Storage` uses LlamaIndex `VectorStoreIndex.insert_nodes()` to generate embeddings — never manually
+- **Embedding**: `Storage` uses LlamaIndex `VectorStoreIndex.ainsert_nodes()` to generate embeddings — never manually
 - **Embedding model**: `llama-index-embeddings-fastembed` (ONNX runtime) with `sentence-transformers/all-MiniLM-L6-v2`, passed to `VectorStoreIndex` via `embed_model` parameter
 - **ChromaDB path**: Default is `.chromadb/`, overridable via `CHROMA_PATH`
 
@@ -121,23 +126,24 @@ uv.lock                    # Dependency lockfile
 **Startup**:
 
 1. CLI parses args, loads `Config.from_env()`
-2. `Storage` initialized with list of `Extractor` objects
-3. `HTTPServer` initialized with `Storage`
-4. `asyncio.gather()` starts: rebuild loop (cron-based) + `server.serve()`
+2. `Storage` initialized with list of `BaseExtractor` objects (currently `[MarkdownExtractor(...)]`)
+3. `MCPServer` initialized with `Storage`
+4. `asyncio.gather()` starts: rebuild loop (cron-based) + `webserver.run()` (`FastMCP.run_streamable_http_async()`)
 
 **Rebuild loop**:
 
-1. Wait until next cron time
-2. Acquire `asyncio.Lock`
-3. `storage.rebuild()` (run via `asyncio.to_thread()` to avoid blocking event loop)
-4. Atomically swap `_client`, `_chroma_collection`, `_vector_store`, `_storage_context`, `_index`
-5. Release lock
-6. Errors: log and continue, old DB remains serving queries
+1. Wait until next cron time (unless `--rebuild-on-start` was passed, which rebuilds immediately first)
+2. For each extractor, iterate `get_nodes(batch_size=400)` and insert each batch into a temporary Chroma collection/index — the current main collection keeps serving queries throughout this phase
+3. Acquire `asyncio.Lock`
+4. Delete the old main collection, create a fresh one, and copy all records (metadata, documents, embeddings) from the temporary collection into it (`sub/storage_utils.copy_chroma_collection`)
+5. Reset `_vector_store`/`_storage_context`/`_index` to reference the new main collection
+6. Release lock
+7. Errors: log and continue, old DB remains serving queries
 
 **Query flow**:
 
-1. MCP request to `/mcp` endpoint (via Streamable-HTTP)
-2. `Storage.search()` retrieves top-k nodes
+1. MCP client calls the `query_notes` tool with `{query, num_docs}`
+2. `Storage.search()` retrieves top-`num_docs` nodes
 3. Format as delimited text:
 
    ```
@@ -147,10 +153,10 @@ uv.lock                    # Dependency lockfile
    another chunk
    ```
 
-4. Return as response
+4. Return as `{"additional_context": "..."}`
 
-**Shutdown** (SIGINT/SIGTERM):
+**Shutdown** (SIGINT/SIGTERM/SIGABRT):
 
-1. Stop HTTP server (flush connections)
-2. Stop rebuild loop
+1. Signal handler cancels the main `asyncio` task
+2. `asyncio.gather()` raises `CancelledError`, rebuild loop and MCP server both stop
 3. Exit

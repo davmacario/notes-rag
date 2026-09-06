@@ -1,10 +1,21 @@
+import logging
+import shutil
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+from typing import List
+from uuid import UUID
 
 import chromadb.config
-from chromadb import Collection, Include, PersistentClient
+from chromadb import PersistentClient
 from chromadb.api import ClientAPI
 
+logger = logging.getLogger(__name__)
 
+SQLITE_FILENAME = "chroma.sqlite3"
+
+
+# NOTE: only update this to allow to use other backend for Chroma
 def create_chroma_client(path: Path) -> ClientAPI:
     """Create a ChromaDB persistent client (i.e., on local disk).
 
@@ -23,21 +34,41 @@ def create_chroma_client(path: Path) -> ClientAPI:
     return client
 
 
-def copy_chroma_collection(source: Collection, dest: Collection, *, chunk_size: int = 100):
-    """Copies all records from collection c1 to collection c2."""
-    offset = 0
-    limit = chunk_size
-    included: Include = ["metadatas", "documents", "embeddings"]
-    results = source.get(include=included, limit=limit, offset=offset)
-    while results["ids"]:
-        dest.add(
-            ids=results["ids"],
-            embeddings=results["embeddings"],
-            documents=results["documents"],
-            metadatas=results["metadatas"],
-        )
-        offset += len(results["ids"])
+def prune_orphan_segments(chroma_path: Path) -> List[Path]:
+    """Remove HNSW segment directories no longer referenced by chroma.sqlite3
 
-        results = source.get(include=included, limit=limit, offset=offset)
+    Required to deal with older app version with incorrect rebuild mechanism.
 
-    return offset
+    Args:
+        chroma_path: Path to the ChromaDB storage directory
+
+    Returns:
+        List of directories that were removed
+    """
+    sqlite_path = Path(chroma_path).resolve() / SQLITE_FILENAME
+    if not sqlite_path.is_file():
+        logger.warning(f"No {SQLITE_FILENAME} under {str(chroma_path)!r}: skipping orphan segment prune")
+        return []
+
+    with closing(sqlite3.connect(f"{sqlite_path.as_uri()}?mode=ro", uri=True)) as connection:
+        live_segments = {row[0] for row in connection.execute("SELECT id FROM segments")}
+
+    removed: List[Path] = []
+    for entry in sqlite_path.parent.iterdir():
+        if entry.is_symlink() or not entry.is_dir() or entry.name in live_segments:
+            continue
+        try:
+            # Segment directories are always named after the canonical form of their segment UUID
+            if str(UUID(entry.name)) != entry.name:
+                continue
+        except ValueError:
+            continue
+
+        try:
+            shutil.rmtree(entry)
+        except OSError:
+            logger.warning(f"Failed to remove orphan segment directory {str(entry)!r}", exc_info=True)
+            continue
+        removed.append(entry)
+
+    return removed

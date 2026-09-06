@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from notes_rag.config import Config
@@ -16,12 +14,12 @@ def setup_env(monkeypatch):
 
 
 @pytest.fixture
-def mock_config():
+def mock_config(tmp_path):
     return Config(
         notes_repo_url="https://github.com/example/notes.git",
-        notes_directory=Path("/tmp/notes"),
+        notes_directory=tmp_path / "notes",
         notes_branch="main",
-        chroma_path=Path("/tmp/chromadb"),
+        chroma_path=tmp_path / "chromadb",
         embedding_model="BAAI/bge-small-en-v1.5",
         server_host="127.0.0.1",
         server_port=8000,

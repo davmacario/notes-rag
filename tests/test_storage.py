@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 from chromadb import Collection
 from chromadb.api import ClientAPI
+from chromadb.errors import NotFoundError
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
@@ -55,6 +56,13 @@ class TestStorage:
     @pytest.fixture
     def mocked_fastembed_embedding(self):
         return MagicMock(spec=FastEmbedEmbedding)
+
+    @pytest.fixture(autouse=True)
+    def mocked_prune(self, monkeypatch):
+        """Never let a test sweep a real ChromaDB directory."""
+        prune = MagicMock(return_value=[])
+        monkeypatch.setattr("notes_rag.storage.prune_orphan_segments", prune)
+        return prune
 
     @pytest.fixture
     def storage(
@@ -212,6 +220,8 @@ class TestStorage:
         self,
         monkeypatch,
         caplog,
+        mock_config,
+        mocked_prune,
         storage,
         mocked_md_extractor,
         mocked_chroma_client,
@@ -228,15 +238,8 @@ class TestStorage:
         mocked_md_extractor.get_nodes.return_value = [nodes]
 
         tmp_collection = MagicMock(spec=Collection)
-        call_count = [0]
-
-        def get_or_create_side_effect(name):
-            call_count[0] += 1
-            if name == f"tmp_{storage.COLLECTION_NAME}":
-                return tmp_collection
-            return mocked_chroma_collection
-
-        mocked_chroma_client.get_or_create_collection.side_effect = get_or_create_side_effect
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+        mocked_chroma_client.get_collection.return_value = mocked_chroma_collection
 
         mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
@@ -245,15 +248,20 @@ class TestStorage:
         mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
 
-        mock_copy = MagicMock(return_value=2)
-        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
-
         with caplog.at_level(logging.INFO):
             await storage.rebuild()
 
+        tmp_name = storage.TMP_COLLECTION_NAME
         mocked_md_extractor.get_nodes.assert_called_once()
         mocked_vector_store_index.ainsert_nodes.assert_called_once_with(nodes)
-        mocked_chroma_client.delete_collection.assert_called_with(storage.COLLECTION_NAME)
+        assert mocked_chroma_client.delete_collection.call_args_list == [
+            call(tmp_name),
+            call(storage.COLLECTION_NAME),
+        ]
+        mocked_chroma_client.create_collection.assert_called_once_with(name=tmp_name)
+        tmp_collection.modify.assert_called_once_with(name=storage.COLLECTION_NAME)
+        mocked_chroma_client.get_collection.assert_called_once_with(name=storage.COLLECTION_NAME)
+        assert storage._chroma_collection is mocked_chroma_collection
         mock_chroma_vector_store_factory.assert_has_calls(
             [call(chroma_collection=tmp_collection), call(chroma_collection=mocked_chroma_collection)]
         )
@@ -262,6 +270,7 @@ class TestStorage:
         mock_vector_store_index_factory.assert_called_with(
             nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_fastembed_embedding
         )
+        mocked_prune.assert_called_once_with(mock_config.chroma_path)
         assert "Rebuild complete: 2 nodes indexed" in caplog.text
 
     async def test_rebuild_no_nodes(
@@ -279,11 +288,8 @@ class TestStorage:
         mocked_md_extractor.get_nodes.return_value = []
 
         tmp_collection = MagicMock(spec=Collection)
-        mocked_chroma_client.get_or_create_collection.side_effect = [
-            mocked_chroma_collection,
-            tmp_collection,
-            mocked_chroma_collection,
-        ]
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+        mocked_chroma_client.get_collection.return_value = mocked_chroma_collection
         mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
         mock_storage_context_from_defaults = MagicMock(return_value=mocked_storage_context)
@@ -291,14 +297,13 @@ class TestStorage:
         mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
 
-        mock_copy = MagicMock(return_value=0)
-        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
-
         with caplog.at_level(logging.WARNING):
             await storage.rebuild()
 
         mocked_md_extractor.get_nodes.assert_called_once()
         mocked_vector_store_index.ainsert_nodes.assert_not_called()
+        # An empty rebuild must still swap, otherwise stale data would survive
+        tmp_collection.modify.assert_called_once_with(name=storage.COLLECTION_NAME)
         assert "No nodes to be indexed!" in caplog.text
 
     async def test_rebuild_no_extractors(
@@ -322,19 +327,8 @@ class TestStorage:
         storage_no_extractors = Storage(mock_config, [])
 
         tmp_collection = MagicMock(spec=Collection)
-        call_count = [0]
-
-        def get_or_create_side_effect(name=None, **kwargs):
-            call_count[0] += 1
-            actual_name = name or (kwargs.get("name") if kwargs else None)
-            if actual_name == f"tmp_{storage_no_extractors.COLLECTION_NAME}":
-                return tmp_collection
-            return mocked_chroma_collection
-
-        mocked_chroma_client.get_or_create_collection.side_effect = get_or_create_side_effect
-
-        mock_copy = MagicMock(return_value=0)
-        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+        mocked_chroma_client.get_collection.return_value = mocked_chroma_collection
 
         with caplog.at_level(logging.WARNING):
             await storage_no_extractors.rebuild()
@@ -367,16 +361,8 @@ class TestStorage:
         storage._extractors = [ext_a, ext_b]
 
         tmp_collection = MagicMock(spec=Collection)
-        call_count = [0]
-
-        def get_or_create_side_effect(name=None, **kwargs):
-            call_count[0] += 1
-            actual_name = name or (kwargs.get("name") if kwargs else None)
-            if actual_name == f"tmp_{storage.COLLECTION_NAME}":
-                return tmp_collection
-            return mocked_chroma_collection
-
-        mocked_chroma_client.get_or_create_collection.side_effect = get_or_create_side_effect
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+        mocked_chroma_client.get_collection.return_value = mocked_chroma_collection
 
         mock_chroma_vector_store_factory = MagicMock(return_value=mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", mock_chroma_vector_store_factory)
@@ -385,9 +371,6 @@ class TestStorage:
         mock_vector_store_index_factory = MagicMock(return_value=mocked_vector_store_index)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", mock_vector_store_index_factory)
 
-        mock_copy = MagicMock(return_value=3)
-        monkeypatch.setattr("notes_rag.storage.copy_chroma_collection", mock_copy)
-
         with caplog.at_level(logging.INFO):
             await storage.rebuild()
 
@@ -395,3 +378,81 @@ class TestStorage:
         assert ext_b.get_nodes.call_count == 1
         assert mocked_vector_store_index.ainsert_nodes.call_count == 2
         assert "Rebuild complete: 3 nodes indexed" in caplog.text
+
+    async def test_rebuild_swap_order(
+        self,
+        storage,
+        mocked_md_extractor,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+    ):
+        """The stale tmp is dropped first, and the live collection is dropped before the rename."""
+        mocked_md_extractor.get_nodes.return_value = [[TextNode(text="x", metadata={"source_file": "a.md"})]]
+
+        tmp_collection = MagicMock(spec=Collection)
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+        mocked_chroma_client.get_collection.return_value = mocked_chroma_collection
+
+        manager = MagicMock()
+        manager.attach_mock(mocked_chroma_client.delete_collection, "delete_collection")
+        manager.attach_mock(mocked_chroma_client.create_collection, "create_collection")
+        manager.attach_mock(mocked_chroma_client.get_collection, "get_collection")
+        manager.attach_mock(tmp_collection.modify, "modify")
+
+        await storage.rebuild()
+
+        tmp_name = storage.TMP_COLLECTION_NAME
+        assert manager.mock_calls == [
+            call.delete_collection(tmp_name),
+            call.create_collection(name=tmp_name),
+            call.delete_collection(storage.COLLECTION_NAME),
+            call.modify(name=storage.COLLECTION_NAME),
+            call.get_collection(name=storage.COLLECTION_NAME),
+        ]
+
+    async def test_rebuild_drops_tmp_collection_on_failure(
+        self,
+        mock_config,
+        mocked_prune,
+        storage,
+        mocked_md_extractor,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+    ):
+        """A failed rebuild leaves no tmp collection behind and keeps the live index intact."""
+        mocked_md_extractor.get_nodes.side_effect = RuntimeError("extractor exploded")
+
+        tmp_collection = MagicMock(spec=Collection)
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+
+        with pytest.raises(RuntimeError, match="extractor exploded"):
+            await storage.rebuild()
+
+        tmp_name = storage.TMP_COLLECTION_NAME
+        assert mocked_chroma_client.delete_collection.call_args_list == [call(tmp_name), call(tmp_name)]
+        tmp_collection.modify.assert_not_called()
+        mocked_chroma_client.get_collection.assert_not_called()
+        assert storage._chroma_collection is mocked_chroma_collection
+        mocked_prune.assert_called_once_with(mock_config.chroma_path)
+
+    async def test_rebuild_tolerates_missing_tmp_collection(
+        self,
+        storage,
+        mocked_md_extractor,
+        mocked_chroma_client,
+        mocked_chroma_collection,
+    ):
+        """On a first run there is no tmp collection to drop."""
+        mocked_md_extractor.get_nodes.return_value = []
+
+        tmp_collection = MagicMock(spec=Collection)
+        mocked_chroma_client.create_collection.return_value = tmp_collection
+        mocked_chroma_client.get_collection.return_value = mocked_chroma_collection
+        mocked_chroma_client.delete_collection.side_effect = [
+            NotFoundError(f"Collection {storage.TMP_COLLECTION_NAME} does not exist."),
+            None,
+        ]
+
+        await storage.rebuild()
+
+        tmp_collection.modify.assert_called_once_with(name=storage.COLLECTION_NAME)

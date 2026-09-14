@@ -3,6 +3,8 @@ from typing import List
 from llama_index.core.schema import TextNode
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from notes_rag.storage import Storage
 
@@ -18,6 +20,7 @@ class MCPServer:
         self.mcp = FastMCP("NotesRAG", stateless_http=True, json_response=True, host=host, port=port)
 
         self._register_tools()
+        self._register_routes()
 
     def _register_tools(self):
         @self.mcp.tool()
@@ -41,6 +44,11 @@ class MCPServer:
             nodes = await self._storage.search(query_body.query, query_body.num_docs)
             additional_context = self._build_llm_context(nodes)
             return {"additional_context": additional_context}
+
+    def _register_routes(self):
+        @self.mcp.custom_route("/health", methods=["GET"])
+        async def health(_: Request):
+            return JSONResponse({"status": "ok"})
 
     def _build_llm_context(self, nodes: List[TextNode]):
         """Builds text returnted to LLM including all retrieved Nodes"""

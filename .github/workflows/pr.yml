@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check:
@@ -39,6 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -58,8 +59,12 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -o pipefail
+          unset GITHUB_ACTIONS
           npm run release:dry -- --branches "$HEAD_REF" 2>&1 \
             | tee /tmp/semantic-release.log
+
+          version="$(grep -oP 'The next release version is \K[0-9][^\s]*' /tmp/semantic-release.log | tail -n 1 || true)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Report next version
         if: always()

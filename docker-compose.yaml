@@ -7,11 +7,18 @@ services:
     env_file: .env
     environment:
       NOTES_BRANCH: main
-      NOTES_DIRECTORY: ./notes_cache
+      NOTES_DIRECTORY: /app/data/notes-cache
+      CHROMA_PATH: /app/data/.chromadb
       REBUILD_CRON: "0 */6 * * *"
       TZ: Europe/Amsterdam
       LOG_LEVEL: "debug"
     ports:
       - "127.0.0.1:9099:9099"
+    volumes:
+      # Persists the notes clone and vector index across container
+      # recreation, so a restart doesn't re-clone and re-embed from scratch.
+      # The image runs as uid/gid 1000, so ./data must be writable by that
+      # user (matches the default first Linux user account).
+      - ./data:/app/data
     command:
       - --rebuild-on-start

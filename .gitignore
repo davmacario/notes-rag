@@ -212,3 +212,6 @@ __marimo__/
 .chroma/
 # Git cloned repos
 .git/
+
+# Node (release tooling)
+node_modules/

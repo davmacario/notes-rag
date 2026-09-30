@@ -21,6 +21,7 @@ def mock_config(tmp_path):
         notes_branch="main",
         chroma_path=tmp_path / "chromadb",
         embedding_model="BAAI/bge-small-en-v1.5",
+        embedding_workers=2,
         server_host="127.0.0.1",
         server_port=8000,
         server_workers=1,

@@ -45,6 +45,7 @@ export NOTES_DIRECTORY="./notes-cache"
 export NOTES_BRANCH="main"
 export CHROMA_PATH="./.chromadb"
 export EMBEDDING_MODEL="sentence-transformers/all-MiniLM-L6-v2"
+export EMBEDDING_WORKERS=2
 export SERVER_HOST="0.0.0.0"
 export SERVER_PORT=9099
 export SERVER_WORKERS=1

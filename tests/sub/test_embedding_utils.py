@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from unittest.mock import MagicMock
 
@@ -65,27 +66,54 @@ class TestEnableBatchLongestPadding:
 class TestCreateEmbedModel:
     """Test create_embed_model function."""
 
-    def test_creates_model_and_fixes_padding(self, monkeypatch, fixed_padding_tokenizer: Tokenizer):
-        mocked_embedding = MagicMock(spec=FastEmbedEmbedding)
-        mocked_embedding._model = MagicMock()
-        mocked_embedding._model.model.tokenizer = fixed_padding_tokenizer
-        mock_factory = MagicMock(return_value=mocked_embedding)
-        monkeypatch.setattr("notes_rag.sub.embedding_utils.FastEmbedEmbedding", mock_factory)
+    @pytest.fixture
+    def mocked_text_embedding(self, monkeypatch, fixed_padding_tokenizer: Tokenizer) -> MagicMock:
+        text_embedding = MagicMock()
+        text_embedding.model.tokenizer = fixed_padding_tokenizer
+        text_embedding_factory = MagicMock(return_value=text_embedding)
+        monkeypatch.setattr("fastembed.TextEmbedding", text_embedding_factory)
+        return text_embedding_factory
 
-        embed_model = create_embed_model("some/model")
+    def test_creates_model_and_fixes_padding(
+        self, mocked_text_embedding: MagicMock, fixed_padding_tokenizer: Tokenizer
+    ):
+        embed_model = create_embed_model("some/model", num_workers=3)
 
-        mock_factory.assert_called_once_with(model_name="some/model")
-        assert embed_model == mocked_embedding
+        assert isinstance(embed_model, FastEmbedEmbedding)
+        assert embed_model.model_name == "some/model"
+        assert mocked_text_embedding.call_args.kwargs["model_name"] == "some/model"
         assert fixed_padding_tokenizer.padding is not None
         assert fixed_padding_tokenizer.padding["length"] is None
 
-    def test_missing_tokenizer_raises(self, monkeypatch):
-        mocked_embedding = MagicMock(spec=FastEmbedEmbedding)
-        mocked_embedding._model = MagicMock()
-        mocked_embedding._model.model.tokenizer = None
-        monkeypatch.setattr(
-            "notes_rag.sub.embedding_utils.FastEmbedEmbedding", MagicMock(return_value=mocked_embedding)
-        )
+    def test_missing_tokenizer_raises(self, mocked_text_embedding: MagicMock):
+        mocked_text_embedding.return_value.model.tokenizer = None
 
         with pytest.raises(RuntimeError, match="tokenizer"):
-            create_embed_model("some/model")
+            create_embed_model("some/model", num_workers=2)
+
+    @pytest.mark.parametrize("num_workers", [-1, 0])
+    def test_rejects_non_positive_workers(self, mocked_text_embedding: MagicMock, num_workers: int):
+        with pytest.raises(ValueError, match="num_workers"):
+            create_embed_model("some/model", num_workers=num_workers)
+        mocked_text_embedding.assert_not_called()
+
+    @pytest.mark.parametrize("num_workers", [1, 2, 4])
+    def test_limits_concurrent_batches(self, monkeypatch, mocked_text_embedding: MagicMock, num_workers: int):
+        running = 0
+        peak = 0
+
+        async def fake_aget_text_embeddings(_self, texts: list[str]) -> list[list[float]]:
+            nonlocal running, peak
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.01)
+            running -= 1
+            return [[0.0]] * len(texts)
+
+        monkeypatch.setattr(FastEmbedEmbedding, "_aget_text_embeddings", fake_aget_text_embeddings)
+        embed_model = create_embed_model("some/model", num_workers=num_workers)
+
+        embeddings = asyncio.run(embed_model.aget_text_embedding_batch(["a"] * 100))
+
+        assert len(embeddings) == 100
+        assert peak == num_workers

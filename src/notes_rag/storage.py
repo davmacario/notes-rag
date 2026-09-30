@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import List
 
 from chromadb import Collection
 from chromadb.errors import NotFoundError
@@ -32,7 +31,7 @@ class Storage:
     def __init__(
         self,
         config: Config,
-        extractors: List[BaseExtractor] = [],
+        extractors: list[BaseExtractor] | None = None,
     ) -> None:
         """Initialize the ChromaDB storage.
 
@@ -42,14 +41,14 @@ class Storage:
             chroma_path: Path to ChromaDB storage directory
         """
         self._config = config
-        self._extractors = extractors
+        self._extractors = extractors or []
         self._lock = asyncio.Lock()
 
         self._client = create_chroma_client(self.chroma_path)
         # Create (or get existing) ChromaDB collection
         self._chroma_collection: Collection = self._client.get_or_create_collection(name=self.COLLECTION_NAME)
         # Embedding model
-        self._embed_model = create_embed_model(self.embed_model)
+        self._embed_model = create_embed_model(self.embed_model, num_workers=self._config.embedding_workers)
         self._reset_llamaindex()
         logger.info(f"Initialized ChromaDB at {str(self.chroma_path)!r}")
 
@@ -78,7 +77,7 @@ class Storage:
         except NotFoundError:
             logger.debug(f"Collection {name!r} not found - unable to drop")
 
-    async def search(self, query: str, top_k: int = 5) -> List[TextNode]:
+    async def search(self, query: str, top_k: int = 5) -> list[TextNode]:
         """Search for similar documents.
 
         Args:
@@ -103,7 +102,7 @@ class Storage:
 
         return nodes
 
-    async def add_nodes(self, nodes: List[TextNode]) -> None:
+    async def add_nodes(self, nodes: list[TextNode]) -> None:
         """Add TextNodes to the vector index.
 
         Uses VectorStoreIndex.insert() to generate embeddings and store them

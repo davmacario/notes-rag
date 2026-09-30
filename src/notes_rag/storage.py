@@ -7,11 +7,11 @@ from chromadb import Collection
 from chromadb.errors import NotFoundError
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
-from llama_index.embeddings.fastembed import FastEmbedEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from notes_rag.config import Config
 from notes_rag.extractor.abstract import BaseExtractor
+from notes_rag.sub.embedding_utils import create_embed_model
 from notes_rag.sub.storage_utils import create_chroma_client, prune_orphan_segments
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class Storage:
         # Create (or get existing) ChromaDB collection
         self._chroma_collection: Collection = self._client.get_or_create_collection(name=self.COLLECTION_NAME)
         # Embedding model
-        self._embed_model = FastEmbedEmbedding(model_name=self.embed_model)
+        self._embed_model = create_embed_model(self.embed_model)
         self._reset_llamaindex()
         logger.info(f"Initialized ChromaDB at {str(self.chroma_path)!r}")
 

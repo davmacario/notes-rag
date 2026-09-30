@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "notes_branch": "main",
     "chroma_path": "./.chromadb",
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_workers": 2,
     "server_host": "0.0.0.0",
     "server_port": 9099,
     "server_workers": 1,
@@ -39,6 +40,7 @@ class Config:
         - NOTES_BRANCH: Git branch of the notes repository (default: "main")
         - CHROMA_PATH: Path to ChromaDB storage (default: "./.chromadb")
         - EMBEDDING_MODEL: Embedding model name (default: "sentence-transformers/all-MiniLM-L6-v2")
+        - EMBEDDING_WORKERS: Max concurrent embedding batches during rebuilds (default: 2)
         - SERVER_HOST: HTTP server host (default: "0.0.0.0")
         - SERVER_PORT: HTTP server port (default: 9099)
         - SERVER_WORKERS: HTTP server workers (default: 1)
@@ -52,6 +54,7 @@ class Config:
     notes_branch: str
     chroma_path: Path
     embedding_model: str
+    embedding_workers: int
     server_host: str
     server_port: int
     server_workers: int
@@ -60,7 +63,7 @@ class Config:
     timezone: str
 
     @classmethod
-    def from_env(cls, env_file: Path | None = None) -> "Config":
+    def from_env(cls, env_file: Path | None = None) -> Config:
         load_dotenv(env_file)
 
         notes_repo_url = get_required_env("NOTES_REPO_URL")
@@ -68,6 +71,7 @@ class Config:
         notes_branch = os.getenv("NOTES_BRANCH", DEFAULT_CONFIG["notes_branch"])
         chroma_path = Path(os.getenv("CHROMA_PATH", DEFAULT_CONFIG["chroma_path"])).resolve()
         embedding_model = os.getenv("EMBEDDING_MODEL", DEFAULT_CONFIG["embedding_model"])
+        embedding_workers = int(os.getenv("EMBEDDING_WORKERS", str(DEFAULT_CONFIG["embedding_workers"])))
         server_host = os.getenv("SERVER_HOST", DEFAULT_CONFIG["server_host"])
         server_port = int(os.getenv("SERVER_PORT", str(DEFAULT_CONFIG["server_port"])))
         server_workers = int(os.getenv("SERVER_WORKERS", str(DEFAULT_CONFIG["server_workers"])))
@@ -81,6 +85,7 @@ class Config:
             notes_branch=notes_branch,
             chroma_path=chroma_path,
             embedding_model=embedding_model,
+            embedding_workers=embedding_workers,
             server_host=server_host,
             server_port=server_port,
             server_workers=server_workers,

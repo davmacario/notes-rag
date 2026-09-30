@@ -81,7 +81,7 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", lambda **_: mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", lambda **_: mocked_storage_context)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", lambda **_: mocked_vector_store_index)
-        monkeypatch.setattr("notes_rag.storage.create_embed_model", lambda *_: mocked_fastembed_embedding)
+        monkeypatch.setattr("notes_rag.storage.create_embed_model", lambda *_, **__: mocked_fastembed_embedding)
         return Storage(mock_config, [mocked_md_extractor])
 
     # --- __init__ ---
@@ -125,7 +125,9 @@ class TestStorage:
         assert storage._vector_store == mocked_chroma_vector_store
         mock_storage_context_from_defaults.assert_called_once_with(vector_store=mocked_chroma_vector_store)
         assert storage._storage_context == mocked_storage_context
-        mock_fastembed_embedding_factory.assert_called_once_with(mock_config.embedding_model)
+        mock_fastembed_embedding_factory.assert_called_once_with(
+            mock_config.embedding_model, num_workers=mock_config.embedding_workers
+        )
         assert storage._embed_model == mocked_fastembed_embedding
         mock_vector_store_index_factory.assert_called_once_with(
             nodes=[], use_async=True, storage_context=mocked_storage_context, embed_model=mocked_fastembed_embedding
@@ -322,7 +324,7 @@ class TestStorage:
         monkeypatch.setattr("notes_rag.storage.ChromaVectorStore", lambda **_: mocked_chroma_vector_store)
         monkeypatch.setattr("notes_rag.storage.StorageContext.from_defaults", lambda **_: mocked_storage_context)
         monkeypatch.setattr("notes_rag.storage.VectorStoreIndex", lambda **_: mocked_vector_store_index)
-        monkeypatch.setattr("notes_rag.storage.create_embed_model", lambda *_: mocked_fastembed_embedding)
+        monkeypatch.setattr("notes_rag.storage.create_embed_model", lambda *_, **__: mocked_fastembed_embedding)
 
         storage_no_extractors = Storage(mock_config, [])
 

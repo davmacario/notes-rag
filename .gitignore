@@ -210,5 +210,7 @@ __marimo__/
 # ChromaDB storage
 .chromadb/
 .chroma/
+# docker-compose bind mount (notes cache + ChromaDB, see docker-compose.yaml)
+/data/
 # Git cloned repos
 .git/

@@ -134,3 +134,40 @@ class TestPruneOrphanSegments:
         assert failing.is_dir()
         assert not other.exists()
         assert str(failing) in caplog.text
+
+
+def test_compact_reclaims_free_pages_without_losing_data(tmp_path):
+    from notes_rag.sub.storage_utils import compact_chroma_database
+
+    path = tmp_path / "chroma.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE data (value BLOB)")
+        db.executemany("INSERT INTO data VALUES (?)", [(b"x" * 8192,)] * 300)
+        db.execute("DELETE FROM data WHERE rowid > 1")
+    before = path.stat().st_size
+    assert compact_chroma_database(tmp_path, min_free_bytes=0)
+    assert path.stat().st_size < before
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT length(value) FROM data").fetchall() == [(8192,)]
+
+
+def test_compact_skips_when_no_database(tmp_path):
+    from notes_rag.sub.storage_utils import compact_chroma_database
+
+    assert not compact_chroma_database(tmp_path, min_free_bytes=0)
+
+
+def test_compact_after_chroma_collection_swap(tmp_path):
+    from notes_rag.sub.storage_utils import compact_chroma_database
+
+    client = create_chroma_client(tmp_path)
+    old = client.create_collection("notes")
+    old.add(ids=[str(i) for i in range(200)], embeddings=[[0.1, 0.2]] * 200, documents=["x" * 4000] * 200)
+    replacement = client.create_collection("tmp_notes")
+    replacement.add(ids=["live"], embeddings=[[0.2, 0.3]], documents=["retained"])
+    client.delete_collection("notes")
+    replacement.modify(name="notes")
+    before = (tmp_path / "chroma.sqlite3").stat().st_size
+    assert compact_chroma_database(tmp_path, min_free_bytes=0)
+    assert (tmp_path / "chroma.sqlite3").stat().st_size < before
+    assert client.get_collection("notes").get(ids=["live"], include=["documents"])["documents"] == ["retained"]

@@ -72,3 +72,22 @@ def prune_orphan_segments(chroma_path: Path) -> List[Path]:
         removed.append(entry)
 
     return removed
+
+
+def compact_chroma_database(chroma_path: Path, min_free_bytes: int = 16 * 1024 * 1024) -> bool:
+    """Reclaim free SQLite pages after collection deletion when worthwhile."""
+    sqlite_path = Path(chroma_path).resolve() / SQLITE_FILENAME
+    if not sqlite_path.is_file():
+        return False
+    try:
+        with closing(sqlite3.connect(f"{sqlite_path.as_uri()}?mode=rw", uri=True, timeout=5)) as connection:
+            page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+            free_pages = connection.execute("PRAGMA freelist_count").fetchone()[0]
+            total_pages = connection.execute("PRAGMA page_count").fetchone()[0]
+            if free_pages * page_size < min_free_bytes or free_pages * 5 < total_pages:
+                return False
+            connection.execute("VACUUM")
+        return True
+    except sqlite3.Error:
+        logger.warning("Could not compact Chroma SQLite database", exc_info=True)
+        return False

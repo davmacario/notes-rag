@@ -11,7 +11,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from notes_rag.config import Config
 from notes_rag.extractor.abstract import BaseExtractor
 from notes_rag.sub.embedding_utils import create_embed_model
-from notes_rag.sub.storage_utils import create_chroma_client, prune_orphan_segments
+from notes_rag.sub.storage_utils import compact_chroma_database, create_chroma_client, prune_orphan_segments
 
 logger = logging.getLogger(__name__)
 
@@ -174,3 +174,6 @@ class Storage:
             removed = await asyncio.to_thread(prune_orphan_segments, self.chroma_path)
             if removed:
                 logger.info(f"Pruned {len(removed)} orphan segment directories")
+            async with self._lock:
+                if await asyncio.to_thread(compact_chroma_database, self.chroma_path):
+                    logger.info("Compacted Chroma SQLite database")

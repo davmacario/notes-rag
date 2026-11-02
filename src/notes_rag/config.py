@@ -1,4 +1,6 @@
+import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +27,51 @@ DEFAULT_CONFIG = {
     "rebuild_cron": "0 */6 * * *",
     "timezone": "Europe/Amsterdam",
 }
+
+
+@dataclass
+class SourceConfig:
+    url: str
+    directory: Path
+    branch: str = "main"
+
+
+def load_sources(path: Path) -> list[SourceConfig]:
+    """Load GitHub sources, expanding environment references in string values."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("sources"), list) or not data["sources"]:
+        raise ValueError("Configuration must contain a non-empty sources list")
+
+    def expand(value: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            name = match.group(1)
+            value = os.getenv(name)
+            if not value:
+                raise ValueError(f"Environment variable {name!r} is not set")
+            return value
+        return re.sub(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}", replace, value)
+
+    sources = []
+    directories = set()
+    for source in data["sources"]:
+        if not isinstance(source, dict) or source.get("type") != "github":
+            raise ValueError("Each source must have type 'github'")
+        if any(not isinstance(source.get(key), str) or not source[key] for key in ("url", "directory")):
+            raise ValueError("Each source must have a URL and directory")
+        branch = source.get("branch", "main")
+        if not isinstance(branch, str) or not branch:
+            raise ValueError("Source branch must be a non-empty string")
+        url = expand(source["url"])
+        from urllib.parse import urlsplit
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or parsed.hostname != "github.com" or not parsed.path.strip("/"):
+            raise ValueError("Source URL must be an HTTPS GitHub repository URL")
+        directory = Path(expand(source["directory"])).resolve()
+        if directory in directories:
+            raise ValueError("Source directories must be unique")
+        directories.add(directory)
+        sources.append(SourceConfig(url=url, directory=directory, branch=expand(branch)))
+    return sources
 
 
 @dataclass
@@ -61,12 +108,15 @@ class Config:
     server_timeout: int
     rebuild_cron: str
     timezone: str
+    sources: list[SourceConfig] | None = None
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> Config:
         load_dotenv(env_file)
 
-        notes_repo_url = get_required_env("NOTES_REPO_URL")
+        config_file = os.getenv("SOURCES_CONFIG")
+        sources = load_sources(Path(config_file)) if config_file else None
+        notes_repo_url = "" if sources else get_required_env("NOTES_REPO_URL")
         notes_directory = Path(os.getenv("NOTES_DIRECTORY", DEFAULT_CONFIG["notes_directory"])).resolve()
         notes_branch = os.getenv("NOTES_BRANCH", DEFAULT_CONFIG["notes_branch"])
         chroma_path = Path(os.getenv("CHROMA_PATH", DEFAULT_CONFIG["chroma_path"])).resolve()
@@ -92,4 +142,5 @@ class Config:
             server_timeout=server_timeout,
             rebuild_cron=rebuild_cron,
             timezone=timezone,
+            sources=sources,
         )

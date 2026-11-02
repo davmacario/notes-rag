@@ -65,13 +65,14 @@ async def main() -> None:
 
     config = Config.from_env()
 
-    md_extractor = MarkdownExtractor(
-        notes_directory=config.notes_directory,
-        notes_repo_url=config.notes_repo_url,
-        notes_repo_branch=config.notes_branch,
-    )
+    if config.sources:
+        extractors = [
+            MarkdownExtractor(source.directory, source.url, source.branch) for source in config.sources
+        ]
+    else:
+        extractors = [MarkdownExtractor(config.notes_directory, config.notes_repo_url, config.notes_branch)]
 
-    storage = Storage(config, [md_extractor])
+    storage = Storage(config, extractors)
     webserver = MCPServer(storage, host=config.server_host, port=config.server_port)
 
     loop = asyncio.get_running_loop()

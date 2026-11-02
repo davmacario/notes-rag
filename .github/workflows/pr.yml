@@ -51,17 +51,22 @@ jobs:
 
       - run: npm ci
 
+      - name: Prepare local release preview
+        run: |
+          git fetch --force --tags "https://github.com/${GITHUB_REPOSITORY}.git"
+          git clone --bare . "$RUNNER_TEMP/release-preview.git"
+          node -e 'const fs = require("fs"); const c = JSON.parse(fs.readFileSync(".releaserc.json")); c.plugins = c.plugins.filter(p => (Array.isArray(p) ? p[0] : p) !== "@semantic-release/github"); fs.writeFileSync(".releaserc.json", JSON.stringify(c));'
+
       # --no-ci is required: semantic-release otherwise bails out early on
       # pull_request events, before it ever analyses the commits.
       # --branches overrides the `main`-only config so the PR branch is allowed.
       - name: semantic-release --dry-run
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -o pipefail
           unset GITHUB_ACTIONS
-          npm run release:dry -- --branches "$HEAD_REF" 2>&1 \
+          npm run release:dry -- --branches "$HEAD_REF" --repository-url "file://$RUNNER_TEMP/release-preview.git" 2>&1 \
             | tee /tmp/semantic-release.log
 
           version="$(grep -oP 'The next release version is \K[0-9][^\s]*' /tmp/semantic-release.log | tail -n 1 || true)"

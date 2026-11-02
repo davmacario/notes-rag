@@ -1,4 +1,6 @@
 import logging
+import os
+import subprocess
 from pathlib import Path
 from typing import Generator, List
 
@@ -33,6 +35,26 @@ class MarkdownExtractor(BaseExtractor):
         self._git = GitManager(self.notes_directory)
         self._notes_repo_url = notes_repo_url
         self._notes_repo_branch = notes_repo_branch
+
+    def remote_revision(self) -> str | None:
+        """Return the current branch head, or None when the remote cannot be checked."""
+        branch = self._notes_repo_branch or "main"
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", "--exit-code", "--heads", self._notes_repo_url, f"refs/heads/{branch}"],
+                capture_output=True, text=True, timeout=30, check=True,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            return result.stdout.split()[0]
+        except (OSError, subprocess.SubprocessError, IndexError):
+            logger.warning("Unable to check notes repository for updates")
+            return None
+
+    def local_revision(self) -> str | None:
+        try:
+            return self._git.repo.head.commit.hexsha if self._git.repo else None
+        except (ValueError, git.GitCommandError):
+            return None
 
     def _init_or_restore_notes_repo(self):
         """Initialize or restore the repository containing the notes.

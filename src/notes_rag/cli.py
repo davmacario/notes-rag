@@ -35,19 +35,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def run_storage_loop(storage: Storage, cron: str, timezone: str, rebuild_on_start: bool = False):
+async def run_storage_loop(
+    storage: Storage, cron: str, timezone: str, rebuild_on_start: bool = False,
+    extractors: list[MarkdownExtractor] | None = None, poll_interval: int = 60,
+):
+    if poll_interval <= 0:
+        raise ValueError("Git poll interval must be positive")
     schedule = Cron(cron).schedule(timezone_str=timezone)
-    if not rebuild_on_start:
-        next_run_datetime = schedule.next()
-        logger.info(f"First run scheduled for {next_run_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-        sleep_duration = next_run_datetime.timestamp() - datetime.now().timestamp()
-        await asyncio.sleep(sleep_duration)
+    next_run = datetime.now().timestamp() if rebuild_on_start else schedule.next().timestamp()
+    indexed_revisions: list[str | None] | None = None
     while True:
-        await storage.rebuild()
-        next_run_datetime = schedule.next()
-        logger.info(f"Next run scheduled for {next_run_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-        sleep_duration = next_run_datetime.timestamp() - datetime.now().timestamp()
-        await asyncio.sleep(sleep_duration)
+        revisions = await asyncio.gather(*(asyncio.to_thread(e.remote_revision) for e in (extractors or [])))
+        # A failed remote check must never be treated as a new commit.
+        changed = bool(revisions) and all(revisions) and revisions != indexed_revisions
+        if changed or datetime.now().timestamp() >= next_run:
+            try:
+                await storage.rebuild()
+            except Exception:
+                logger.exception("Index rebuild failed; will retry")
+            else:
+                if revisions and all(revisions):
+                    local = [extractor.local_revision() for extractor in (extractors or [])]
+                    if local == revisions:
+                        indexed_revisions = list(revisions)
+            next_run = schedule.next().timestamp()
+        await asyncio.sleep(min(poll_interval, max(0, next_run - datetime.now().timestamp())))
 
 
 async def main() -> None:
@@ -88,7 +100,10 @@ async def main() -> None:
 
     try:
         await asyncio.gather(
-            run_storage_loop(storage, config.rebuild_cron, config.timezone, rebuild_on_start=args.rebuild_on_start),
+            run_storage_loop(
+                storage, config.rebuild_cron, config.timezone, rebuild_on_start=args.rebuild_on_start,
+                extractors=[md_extractor], poll_interval=int(os.getenv("GIT_POLL_INTERVAL", "60")),
+            ),
             webserver.run(),
         )
     except asyncio.CancelledError:
